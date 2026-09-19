@@ -3,7 +3,7 @@
 [![CI](https://github.com/RealCaCl2/autoverify/actions/workflows/ci.yml/badge.svg)](https://github.com/RealCaCl2/autoverify/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-校园网门户（**卓智 / 深澜 zportal**）的 OpenWrt 自动认证程序，含 LuCI 设置页面。
+校园网门户（**卓智**）的 OpenWrt 自动认证程序，含 LuCI 设置页面。
 
 纯 POSIX sh 实现，无编译依赖，运行时仅需 `curl`。断线自动重认证，出口接口 up 时立即认证。
 
