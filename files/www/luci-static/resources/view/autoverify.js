@@ -210,6 +210,42 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
+		/* --------------------------------------------------------- DHCP --- */
+		s = m.section(form.NamedSection, 'dhcp', 'hardening', _('DHCP 伪装'));
+		s.addremove = false;
+		s.anonymous = true;
+
+		o = s.option(form.Flag, 'enabled', _('启用'),
+			_('校园网的 DHCP 服务器会记录三个字段，而 OpenWrt 的默认值等于直接自报家门：' +
+			  '主机名 "OpenWrt"、client-id 是一串 DUID、厂商号 "udhcp <版本号>"（连 DHCP 客户端实现都报出去了）。' +
+			  '本项把它们换成普通终端的样子。' +
+			  '注意：改 client-id 有可能让 DHCP 服务器重新分配地址，会短暂断网（本项目会自动重新认证）。'));
+		o.default = '1';
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'hostname', _('伪装主机名'),
+			_('留空则首次应用时随机生成一个 LAPTOP-XXXXXXXX（Windows 默认命名风格）并写回配置，' +
+			  '之后保持不变。不要填带 OpenWrt 字样的名字。'));
+		o.placeholder = 'LAPTOP-AB12CD34';
+		o.depends('enabled', '1');
+
+		o = s.option(form.Value, 'vendorid', _('伪装厂商号'),
+			_('Windows 客户端发的是 MSFT 5.0。留空会退回 OpenWrt 默认值，不建议。'));
+		o.placeholder = 'MSFT 5.0';
+		o.depends('enabled', '1');
+
+		/* --------------------------------------------------------- IPv6 --- */
+		s = m.section(form.NamedSection, 'ipv6', 'hardening', _('IPv6 防护'));
+		s.addremove = false;
+		s.anonymous = true;
+
+		o = s.option(form.Flag, 'enabled', _('启用'),
+			_('关掉 LAN 的 RA 与 DHCPv6。本项目所有措施的前提是「设备藏在 NAT 后面」，' +
+			  '而 IPv6 不做 NAT —— 一旦上游下发全局前缀且 LAN 还在发 RA，每台客户端会直接拿到' +
+			  '可路由地址，绕过本机全部出站检查。代价：局域网内也没有 IPv6 了。'));
+		o.default = '1';
+		o.rmempty = false;
+
 		/* ---------------------------------------------------------- 操作 --- */
 		var actions = E('div', { 'class': 'cbi-section' }, [
 			E('h3', _('操作')),

@@ -1,4 +1,4 @@
-# 反检测加固措施（TTL / NTP / DNS）
+# 反检测加固措施（TTL / NTP / DNS / DHCP / IPv6）
 
 > ⚠️ 这一部分**主动对抗校园网的多设备检测**。使用它**可能违反你所在学校的网络使用
 > 规定**，后果由使用者承担。这些措施都可以被绕过，也不保证有效。
@@ -10,14 +10,15 @@
 
 ### 开关
 
-三者统一由 `autoverify-hardening` 控制，**改的是 UCI，然后调用 `autoverify-apply` 落地**：
+五项统一由 `autoverify-hardening` 控制，**改的是 UCI，然后调用 `autoverify-apply` 落地**：
 
 ```sh
-autoverify-hardening status            # 看三项开关 + 系统实际状态
+autoverify-hardening status            # 看五项开关 + 系统实际状态
 ```
 
-所以 UCI 里的 `ttl.enabled` / `ntp.enabled` / `dns.enabled` 才是事实来源，
-LuCI 页面、`uci set`、命令行开关三种途径改的是同一个地方，不会互相覆盖。
+所以 UCI 里的 `ttl.enabled` / `ntp.enabled` / `dns.enabled` / `dhcp.enabled` /
+`ipv6.enabled` 才是事实来源，LuCI 页面、`uci set`、命令行开关三种途径改的是同一个地方，
+不会互相覆盖。
 
 ### 解决什么
 
@@ -158,16 +159,102 @@ autoverify-hardening dns status      # 含 dnsmasq 监听情况和规则计数
 基本没有。dnsmasq 本来就在跑，客户端只是从“自己解析”变成“让路由器解析”。
 唯一影响：客户端无法再用自定义 DNS（比如自带广告过滤的解析器）。
 
-## 三项反检测措施一览
+## DHCP 伪装
 
-| 措施 | 收敛的是 | 写入位置 | 开关 |
+### 解决什么
+
+校园网的 DHCP 服务器会记录每个客户端报上来的三个字段。OpenWrt 的默认值
+**全部都在直接自报家门**：
+
+| 字段 | OpenWrt 默认值 | 问题 |
+|---|---|---|
+| 主机名 (12) | `OpenWrt` | DHCP 服务器专门记录这个字段，很多管理后台的设备列表直接显示它 |
+| client-id (61) | 一串 DUID | 普通终端发的是 `01:<MAC>`（类型 1 + 硬件地址）。DUID 是路由器/服务端的写法 |
+| 厂商号 (60) | `udhcp <版本号>` | **连 DHCP 客户端实现和版本号都报出去了** |
+
+另外 DHCPv6 的 `Client-FQDN` 用的是系统主机名，会把 `OpenWrt` 再泄露一次。
+
+> 这三个字段不只是给学校 DHCP 服务器看的。DHCP 用的是二层广播，
+> **同一广播域内的其他主机也能看到** —— 在扁平化的校园网里就是同一层楼的其他人。
+
+### 用法
+
+```sh
+autoverify-hardening dhcp on                    # 主机名留空 = 自动随机生成
+autoverify-hardening dhcp on MY-PC              # 指定主机名
+autoverify-hardening dhcp on MY-PC 'MSFT 5.0'   # 顺便指定厂商号
+autoverify-hardening dhcp off                   # 恢复 OpenWrt 默认
+```
+
+主机名留空时，首次应用会生成一个形如 `LAPTOP-XXXXXXXX` 的名字（Windows 默认命名风格）
+并**写回 `/etc/config/autoverify`**，之后保持不变 —— 每次 apply 都换名字本身就是个特征。
+
+client-id 不需要配置，从 WAN 口 MAC 自动推导成 `01:<MAC>` —— 刚好就是你其它真实设备在发的格式。
+
+### 代价（必须知道）
+
+**改 client-id 有可能让 DHCP 服务器重新分配地址。** 不少 DHCP 服务器是按 client-id
+绑定租约的。换了 IP 会短暂断网（本项目会自动重新认证），但如果你在开会/打游戏，
+选个合适的时间做。
+
+> 本项目只在值**真的变了**的时候才重开接口，所以开机不会反复 ifup。
+
+### 没覆盖的
+
+内核的 DHCP 客户端实现本身没变 —— 参数请求列表（option 55）、报文时序、
+超时行为仍然是 busybox `udhcpc` 的。这些不如上面三个字段显眼，但也没藏住。
+
+## IPv6 防护
+
+### 解决什么
+
+这个开关防的是**全军覆没**级别的事故。
+
+本项目所有 L3/L4 措施的前提是「设备藏在 NAT 后面」。而 **IPv6 不做 NAT** ——
+只要上游下发一个全局前缀、且 LAN 还在发 RA，每台客户端就会直接拿到可路由的
+IPv6 地址，绕过本机所有出站检查，**TTL / NTP / DNS / UA 全部失效**。
+
+关掉 LAN 的 `ra` 与 `dhcpv6` 后，LAN 只跑 IPv4，从结构上不可能发生这种泄露。
+
+### 用法
+
+```sh
+autoverify-hardening ipv6 on     # 关掉 LAN 的 RA 与 DHCPv6
+autoverify-hardening ipv6 off    # 恢复（ra=server, dhcpv6=server, ra_slaac=1）
+```
+
+### 代价
+
+**局域网内也没有 IPv6 了。** 当前校园网本来就不提供 IPv6，所以实际影响为零；
+如果你把这个包用在有 IPv6 的家庭网络上，请把它关掉。
+
+### 怎么知道真的生效了
+
+不要只看配置。看**客户端地址的生命周期是否还在被续期**：
+
+```powershell
+# Windows，看 fd16:/你的前缀开头的地址，间隔 100 秒采两次
+Get-NetIPAddress -AddressFamily IPv6 | Where-Object { $_.PrefixOrigin -eq 'RouterAdvertisement' }
+```
+
+RA 还在的话，每次通告都会把 lifetime 刷新回满值；RA 停了则只会单调递减。
+实测中 100 秒内减少了 101 秒，就说明确实停了。
+
+---
+
+## 五项反检测措施一览
+
+| 措施 | 收敛/伪装的是 | 写入位置 | 开关 |
 |---|---|---|---|
 | TTL | IPv4 TTL | `/etc/nftables.d/20-ttl-normalize.nft` | `uci set autoverify.ttl.enabled` |
 | NTP | LAN `udp/123` | UCI `firewall.ntp_converge` | `uci set autoverify.ntp.enabled` |
 | DNS | LAN `udp/tcp 53` | UCI `firewall.dns_converge_{udp,tcp}` | `uci set autoverify.dns.enabled` |
+| DHCP | hostname / client-id / vendor-class / DHCPv6 FQDN | `network.<iface>.*` + `network.<iface>6.noclientfqdn` | `uci set autoverify.dhcp.enabled` |
+| IPv6 | LAN 不发 RA / DHCPv6 | `dhcp.lan.ra` / `dhcp.lan.dhcpv6` | `uci set autoverify.ipv6.enabled` |
 
-三项都不随 autoverify 自动启用，重启和 `fw4 reload` 后都仍在。改完 UCI 后
-执行 `/usr/sbin/autoverify-apply` 落地（或 `/etc/init.d/autoverify reload`）。
+五项都不随 autoverify 的认证进程一起跑，开机时由 `/etc/init.d/autoverify` 调用
+`autoverify-apply` 从 UCI 落地，重启和 `fw4 reload` 后都仍在。改完 UCI 后执行
+`/usr/sbin/autoverify-apply` 落地（或 `/etc/init.d/autoverify reload`）。
 
 ## 其它可能的检测方式
 

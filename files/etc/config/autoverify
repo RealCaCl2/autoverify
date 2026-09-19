@@ -39,3 +39,17 @@ config hardening 'ntp'
 
 config hardening 'dns'
 	option enabled '1'
+
+config hardening 'dhcp'
+	option enabled '1'
+	# 冒充成什么主机名。留空 = 首次应用时随机生成一个 LAPTOP-XXXXXXXX
+	# 并写回到这里(只生成一次, 之后保持不变)。
+	option hostname ''
+	# 冒充成什么厂商。Windows 发的是 MSFT 5.0。
+	# 留空会退回 OpenWrt 默认值 "udhcp <版本号>", 等于直接报出 DHCP 客户端实现。
+	option vendorid 'MSFT 5.0'
+	# 要改哪个 UCI 接口。
+	option iface 'wan'
+
+config hardening 'ipv6'
+	option enabled '1'

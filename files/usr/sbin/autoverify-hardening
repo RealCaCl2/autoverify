@@ -8,6 +8,8 @@
 #   autoverify-hardening ttl off
 #   autoverify-hardening ntp on|off
 #   autoverify-hardening dns on|off
+#   autoverify-hardening dhcp on|off [主机名] [厂商号]
+#   autoverify-hardening ipv6 on|off
 #
 # 本脚本只改 /etc/config/autoverify 里的开关, 然后调用 autoverify-apply
 # 把配置落到系统上。真正的事实来源始终是 UCI, 所以也可以用 LuCI 页面或 uci 命令改。
@@ -33,8 +35,12 @@ apply() {
 
 usage() {
 	cat >&2 <<EOF
-用法: $0 {status|ttl|ntp|dns} [on|off]
+用法: $0 {status|ttl|ntp|dns|dhcp|ipv6} [on|off]
       $0 ttl on [64|128]
+      $0 dhcp on [主机名] [厂商号]
+
+  dhcp 伪装主机名 / client-id / 厂商号, 并关掉 DHCPv6 的 FQDN。
+  ipv6  关掉 LAN 的 RA 与 DHCPv6, 防止下发全局前缀后绕过 NAT。
 EOF
 	exit 2
 }
@@ -54,11 +60,24 @@ do_toggle() {
 case "${1:-status}" in
 status)
 	need_uci
-	_bool() { [ "$(av_cfg_bool "$1" enabled 0)" = "1" ] && printf '启用' || printf '关闭'; }
+	# 各段的默认值不一样。ttl/ntp/dns 从第一个版本起就写在配置文件里, 默认值只是
+	# 兰截; 而 dhcp/ipv6 是后加的选项 —— 升级用户的 /etc/config/autoverify 是 conffile
+	# 保留的, 里面根本没有这两段。如果它们默认成关闭, 装上新版反而会把已经生效的
+	# 伪装措施删掉、把 RA 重新打开。所以这两段缺失时按启用处理。
+	_bool() {
+		case "$1" in
+			dhcp|ipv6) _d=1 ;;
+			*)         _d=0 ;;
+		esac
+		[ "$(av_cfg_bool "$1" enabled "$_d")" = "1" ] && printf '启用' || printf '关闭'
+	}
 	echo "===== 配置 (UCI /etc/config/autoverify) ====="
 	printf '  TTL 归一化 : %s  值=%s\n' "$(_bool ttl)" "$(av_cfg ttl ttl 64)"
 	printf '  NTP 收敛   : %s\n' "$(_bool ntp)"
 	printf '  DNS 收敛   : %s\n' "$(_bool dns)"
+	printf '  DHCP 伪装  : %s  主机名=%s 厂商=%s\n' "$(_bool dhcp)" \
+		"$(av_cfg dhcp hostname "(留空, 首次应用时生成)")" "$(av_cfg dhcp vendorid "(OpenWrt 默认)")"
+	printf '  IPv6 防护  : %s\n' "$(_bool ipv6)"
 	echo
 	echo "===== 系统实际状态 ====="
 	if [ -e "$NFT_FILE" ]; then
@@ -74,6 +93,20 @@ status)
 	fi
 	printf '  dnsmasq 53 : %s 个 udp 监听\n' "$(netstat -lnu 2>/dev/null | grep -cE ':53[[:space:]]')"
 	printf '  ntpd 123   : %s 个 udp 监听\n' "$(netstat -lnu 2>/dev/null | grep -cE ':123[[:space:]]')"
+	# DHCP 伪装与 IPv6 防护落在 network / dhcp 两个包自己的配置里,
+	# 所以要看的不是 UCI 开关而是系统里实际生效的值。
+	_if=$(av_cfg dhcp iface wan); [ -n "$_if" ] || _if=wan
+	printf '  DHCP 实际  : hostname=%s clientid=%s vendorid=%s\n' \
+		"$(uci -q get "network.$_if.hostname" || echo '(未设)')" \
+		"$(uci -q get "network.$_if.clientid" || echo '(未设, 会发 DUID)')" \
+		"$(uci -q get "network.$_if.vendorid" || echo '(未设, 会发 udhcp 版本)')"
+	printf '  DHCPv6 FQDN: %s\n' \
+		"$([ "$(uci -q get "network.${_if}6.noclientfqdn")" = "1" ] && echo '已关(不再泄露主机名)' || echo '⚠️  未关, 仍会用系统主机名')"
+	printf '  LAN RA/DHCPv6: %s / %s\n' \
+		"$(uci -q get dhcp.lan.ra || echo '(默认)')" "$(uci -q get dhcp.lan.dhcpv6 || echo '(默认)')"
+	case "$(uci -q get dhcp.lan.ra)" in
+		server|relay) echo "    ⚠️  LAN 仍在发 RA: 一旦上游下发全局前缀, 客户端会绕过 NAT" ;;
+	esac
 	;;
 ttl)
 	need_uci
@@ -88,5 +121,17 @@ ttl)
 	;;
 ntp)    need_uci; do_toggle ntp "${2:-}" ;;
 dns)    need_uci; do_toggle dns "${2:-}" ;;
+dhcp)
+	need_uci
+	# 允许顺便换主机名 / 厂商号:  dhcp on [主机名] [厂商号]
+	# 主机名留空则交给 apply 随机生成。
+	if [ "${2:-}" = "on" ]; then
+		if [ -n "${3:-}" ]; then uci set "autoverify.dhcp.hostname=$3"; fi
+		if [ -n "${4:-}" ]; then uci set "autoverify.dhcp.vendorid=$4"; fi
+		uci commit autoverify
+	fi
+	do_toggle dhcp "${2:-}"
+	;;
+ipv6)   need_uci; do_toggle ipv6 "${2:-}" ;;
 *)      usage ;;
 esac

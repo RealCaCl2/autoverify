@@ -16,8 +16,8 @@
 
 - 本项目**仅实现认证自动化**。校园网通常按 IP 计会话，路由器 NAT 后方的多台设备共用
   同一个已认证 IP，该行为在**多数学校的用户协议中属于明确禁止项**。
-- `autoverify-hardening`（TTL 归一化 / NTP 收敛 / DNS 收敛）属于**主动对抗多设备检测**
-  的措施，使用它**可能违反所在学校的网络使用规定**，后果由使用者自行承担。
+- `autoverify-hardening`（TTL 归一化 / NTP 收敛 / DNS 收敛 / DHCP 伪装 / IPv6 防护）
+  属于**主动对抗多设备检测**的措施，使用它**可能违反所在学校的网络使用规定**，后果由使用者自行承担。
 - 上述措施**均可被绕过，且不保证有效**。其原理与自检方法见
   [docs/detection.md](docs/detection.md)。
 - **请仅在具有使用权的账号与网络上运行本程序。**
@@ -140,7 +140,7 @@ uci commit autoverify
 | `portal` | `host` / `port` / `url` | 门户地址 |
 | `tuning` | `probe_urls` / `expect_code` / `http_timeout` / `check_interval` / `retry_interval` / `max_retry_interval` / `verbose` | 探测与轮询 |
 | `network` | `wan_if` / `hotplug_if` / `lan_dev` | 接口 |
-| `ttl` / `ntp` / `dns` | `enabled` 等 | 反检测措施，见 **[docs/hardening.md](docs/hardening.md)** |
+| `ttl` / `ntp` / `dns` / `dhcp` / `ipv6` | `enabled` 等 | 反检测措施，见 **[docs/hardening.md](docs/hardening.md)** |
 
 **`portal.url` 通常留空。** 未认证时程序会自动从 NAS 响应中解析登录页地址，
 `wlanuserip` / `mac` / `nasip` / `wlanacname` / `ssid` 均自动跟随网络变化。
@@ -222,6 +222,8 @@ https 不通或仓库无 Release 时会明确报错并返回 2。
 | TTL 归一化 | 开关 + TTL 值（64 / 128 下拉选择） |
 | NTP 收敛 | 开关 + 上游服务器列表 |
 | DNS 收敛 | 开关 |
+| DHCP 伪装 | 开关 + 伪装主机名（留空则随机生成）+ 伪装厂商号 |
+| IPv6 防护 | 开关（关掉 LAN 的 RA/DHCPv6） |
 | 操作 | 立即认证一次 / 检测连通性 / 查看加固状态 / 检查更新 / 将要提交的认证字段（输出+退出码弹窗） |
 
 四个按钮均以 `-v` 调用并显示退出码：`autoverify check` / `once` **在正常情况下不产生
@@ -251,8 +253,8 @@ usr/share/rpcd/acl.d/luci-app-autoverify.json    权限(uci 读写 + 三条命�
 | `/usr/sbin/autoverify daemon` | 每 `CHECK_INTERVAL`(60s) 探测一次，掉线即重新认证 |
 | `/etc/hotplug.d/iface/99-autoverify` | 出口接口 up 时立即认证一次，不等待轮询 |
 
-三项反检测措施（TTL 归一化 / NTP 收敛 / DNS 收敛）由 `autoverify-hardening` 控制，
-**开机时由 init 脚本自动从 UCI 应用**，不随认证进程一起运行。
+五项反检测措施（TTL 归一化 / NTP 收敛 / DNS 收敛 / DHCP 伪装 / IPv6 防护）
+由 `autoverify-hardening` 控制，**开机时由 init 脚本自动从 UCI 应用**，不随认证进程一起运行。
 详见 **[docs/hardening.md](docs/hardening.md)**。
 
 `daemon` 的等待采用“后台 sleep + wait”而非前台 `sleep`。busybox ash 需等待前台
@@ -307,6 +309,8 @@ mock 仅在 `goToAuthResult` 被请求后才返回 204。
 |---|---|
 | L3 TTL | `autoverify-hardening ttl` |
 | L4 NTP / DNS | `autoverify-hardening ntp` / `dns` |
+| 出口身份 DHCP | `autoverify-hardening dhcp` |
+| IPv6 防泄露 | `autoverify-hardening ipv6` |
 | L7 HTTP UA | UA-Mask（外部项目） |
 
 **并用时的交互**（以下结论来自对其 `init.d/UAmask` 源码与本项目实际规则的比对，
@@ -341,7 +345,7 @@ mock 仅在 `goToAuthResult` 被请求后才返回 204。
 | 文档 | 内容 |
 |---|---|
 | [docs/protocol.md](docs/protocol.md) | zportal 协议实测说明（实现依据） |
-| [docs/hardening.md](docs/hardening.md) | 反检测加固：TTL / NTP / DNS |
+| [docs/hardening.md](docs/hardening.md) | 反检测加固：TTL / NTP / DNS / DHCP / IPv6 |
 | [docs/detection.md](docs/detection.md) | 多设备检测方式清单、证据强度、自检方法 |
 | [docs/verification.md](docs/verification.md) | 实测记录 |
 

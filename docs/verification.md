@@ -5,7 +5,7 @@
 
 ---
 
-已在真实环境（淮安大学校园网 / Xiaomi Mi Router 4A Gigabit v2 / OpenWrt 25.12.5 / STA 连 `iHuaiGong-Student`）跑通：
+已在真实环境（校园网 / Xiaomi Mi Router 4A Gigabit v2 / OpenWrt 25.12.5，有线 WAN）跑通：
 
 - 连通性探测、WAN 自动识别（`phy1-sta0` / `10.80.3.64`）
 - 从 NAS 的 200 响应里解析出 `/zportal/login?...`，跨两跳拿到登录页
@@ -14,6 +14,16 @@
 - `autoverify-hardening ttl`：用 `traceroute` 只剩第一跳作证；规则计数持续增长
 - `autoverify-hardening ntp`：conntrack 证明回包确实来自路由器（`src=192.168.1.1`）
 - `autoverify-hardening dns`：同上，且客户端解析与 HTTPS 访问均正常
+- `autoverify-hardening dhcp`：**抓包看真实 DHCP 报文**，三个字段均已被替换
+  （主机名 `LAPTOP-XXXXXXXX`、client-id `ether 58:ea:1f:31:04:bd`、vendor-class `MSFT 5.0`），
+  且 `Requested-IP` 与租约 IP 一致 —— 换 client-id 没有导致换 IP。
+  DHCPv6 侧：修好后 `(Client-FQDN)` 选项从报文中消失，报文长度 112 -> 98 字节
+- `autoverify-hardening ipv6`：不只看配置 —— 若客户端地址的 `ValidLifetime`
+  还在被 RA 续期，就说明没生效。实测 100 秒内减少 101 秒（单调递减、无续期）
+- **出站 UA 不再自报家门**：用 `tcpdump` 抓真实探测报文，线上 `User-Agent` 已变为普通 Chrome，
+  旧值里的 `OpenWrt` / `autoverify` 字样彻底消失（抓完即卸，不常驻）
+- **`autoverify update-check` 退出码矩阵**：r3<r4 返 1（有新版）、r4=r4 返 0、
+  r10>r4 返 0（不误报）、读不到版本与网络不通各返 2
 - **apk 包**：`apk add --allow-untrusted` 安装成功，包内 14 个文件全部到位，
   与仓库源码 **MD5 逐个一致**；apk 的 conffile 机制正确保留了已有 UCI 配置（密码未丢）
 - **LuCI 菜单已注册**：LuCI 索引缓存里出现了 `"autoverify"` 与 `"luci-app-autoverify"`；
