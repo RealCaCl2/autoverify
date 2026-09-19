@@ -158,7 +158,7 @@ apply_dns() {
 # 优先读内核 uuid(每个字节都是随机的), 读不到再退回 urandom 过 tr。
 # 映射用 v%32: 一个字节 0..255 正好均分给 32 个字符表位置, 分布是均匀的。
 gen_hostname() {
-	_u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | tr 'A-F' 'a-f')
+	_u=$(tr -d '-' < /proc/sys/kernel/random/uuid 2>/dev/null | tr 'A-F' 'a-f')
 	[ -n "$_u" ] || _u=$(head -c 32 /dev/urandom 2>/dev/null | tr -dc 'a-f0-9')
 	[ -n "$_u" ] || return 1
 	awk -v u="$_u" 'BEGIN {

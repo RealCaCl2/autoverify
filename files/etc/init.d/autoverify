@@ -20,9 +20,10 @@ APPLY=/usr/sbin/autoverify-apply
 
 start_service() {
 	config_load autoverify
-	# config_get_bool 把结果写入第一个参数, shellcheck 不知道这一约定
-	# shellcheck disable=SC2154
+	# config_get_bool 把结果写入第一个参数, shellcheck 看不到这个约定。
+	# 抑制注释必须紧贴引用那一行 —— 写在赋值前只会盖住赋值行。
 	config_get_bool _enabled main enabled 1
+	# shellcheck disable=SC2154
 	if [ "$_enabled" != "1" ]; then
 		logger -t autoverify "配置中已禁用 (autoverify.main.enabled=0), 不启动"
 		return 0
