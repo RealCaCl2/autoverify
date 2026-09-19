@@ -1,0 +1,25 @@
+# 构建产物：走 Releases 或 CI 附件，不进仓库
+dist/
+*.apk
+*.ipk
+
+# OpenWrt SDK 构建目录（tools/build-apk.sh 默认放在 $HOME，这里只是兜底）
+/openwrt-sdk-*/
+/openwrt-apk-build/
+sdk/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.bak
+*.orig
+*.rej
+
+# 注意：files/etc/config/autoverify 是**包内默认配置**（账号密码为空），必须提交。
+# 你自己的真实配置在路由器上（/etc/config/autoverify），不要拷进仓库。

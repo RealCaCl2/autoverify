@@ -1,0 +1,38 @@
+
+config autoverify 'main'
+	option enabled '1'
+	# 校园网账号密码。留空请去 LuCI 页面(服务 -> 校园网自动认证)填。
+	option username ''
+	option password ''
+
+config autoverify 'portal'
+	# 你所在学校的门户地址。留空则从探测响应里的 /zportal/ 自动识别, 大多数 zportal
+	# 学校都不需要填。只有"门户返回的是相对路径"时, 才必须填 host 才能补全。
+	option host ''
+	option port '9090'
+	option url ''
+
+config autoverify 'tuning'
+	option probe_urls 'http://connect.rom.miui.com/generate_204 http://connectivitycheck.platform.hicloud.com/generate_204 http://wifi.vivo.com.cn/generate_204'
+	option expect_code '204'
+	option http_timeout '8'
+	option check_interval '60'
+	option retry_interval '20'
+	option max_retry_interval '300'
+	option verbose '0'
+
+config autoverify 'network'
+	option wan_if ''
+	option hotplug_if 'wwan'
+	option lan_dev 'br-lan'
+
+config hardening 'ttl'
+	option enabled '1'
+	option ttl '64'
+
+config hardening 'ntp'
+	option enabled '1'
+	option server 'ntp.aliyun.com time1.cloud.tencent.com'
+
+config hardening 'dns'
+	option enabled '1'

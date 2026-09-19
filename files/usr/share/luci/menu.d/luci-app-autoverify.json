@@ -1,0 +1,13 @@
+{
+	"admin/services/autoverify": {
+		"title": "校园网自动认证",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "autoverify"
+		},
+		"depends": {
+			"acl": [ "luci-app-autoverify" ]
+		}
+	}
+}

@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# 出口接口 up 时立即触发一次认证检查，不必等守护进程的下一个轮询周期。
+# 该接口不在 procd 的 reload trigger 范围内，因此需要独立文件。
+
+[ "$ACTION" = "ifup" ] || exit 0
+[ -x /usr/sbin/autoverify ] || exit 0
+
+# 用配置读取库拿 hotplug_if（netifd 接口名，如 wwan），
+# 注意它和 network.wan_if（netdev 名，如 phy1-sta0）不是同一个命名空间。
+AV_LIB="${AV_LIB:-/usr/lib/autoverify/cfg.sh}"
+AV_PKG=autoverify
+[ -r "$AV_LIB" ] && . "$AV_LIB"
+
+if command -v av_cfg >/dev/null 2>&1; then
+	HOTPLUG_IF=$(av_cfg network hotplug_if "wan wan6 wwan wwan6")
+	ENABLED=$(av_cfg_bool main enabled "1")
+else
+	HOTPLUG_IF="wan wan6 wwan wwan6"
+	ENABLED=1
+fi
+
+[ "$ENABLED" = "1" ] || exit 0
+
+case " $HOTPLUG_IF " in
+	*" $INTERFACE "*) ;;
+	*) exit 0 ;;
+esac
+
+# 后台执行，不阻塞 hotplug
+/usr/sbin/autoverify once >/dev/null 2>&1 &

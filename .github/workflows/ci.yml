@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: 回归测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 回归测试要用真实 curl 和 python3 起 mock 门户, 不接触任何真实校园网
+      - name: 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl python3
+
+      - name: 全部脚本的 POSIX sh 语法检查
+        run: |
+          set -e
+          for f in files/usr/sbin/autoverify \
+                   files/usr/sbin/autoverify-apply \
+                   files/usr/sbin/autoverify-hardening \
+                   files/usr/lib/autoverify/cfg.sh \
+                   files/etc/init.d/autoverify \
+                   files/etc/hotplug.d/iface/99-autoverify \
+                   files/etc/uci-defaults/90-autoverify-migrate \
+                   test/run.sh; do
+            printf 'dash -n %s\n' "$f"
+            dash -n "$f"
+          done
+
+      - name: shellcheck（不阻断构建）
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck -s sh -e SC1090,SC1091 \
+            files/usr/sbin/autoverify files/usr/sbin/autoverify-apply \
+            files/usr/sbin/autoverify-hardening files/usr/lib/autoverify/cfg.sh \
+            files/etc/init.d/autoverify files/etc/hotplug.d/iface/99-autoverify \
+            files/etc/uci-defaults/90-autoverify-migrate test/run.sh
+
+      - name: LuCI 视图与 JSON 语法
+        run: |
+          node --check files/www/luci-static/resources/view/autoverify.js
+          node -e "
+            for (const p of ['files/usr/share/luci/menu.d/luci-app-autoverify.json',
+                             'files/usr/share/rpcd/acl.d/luci-app-autoverify.json'])
+              JSON.parse(require('fs').readFileSync(p, 'utf8'));
+            console.log('JSON OK');
+          "
+
+      - name: 回归测试
+        run: sh test/run.sh
+
+  build:
+    name: 构建 apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # SDK 解压后要跑 OpenWrt 构建系统, 缺 flex/bison/ncurses 会在 make defconfig 卡住
+      - name: 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zstd flex bison \
+            libncurses-dev unzip rsync wget file gettext gawk python3
+
+      - name: 用 OpenWrt SDK 构建
+        run: bash tools/build-apk.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autoverify-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+      # 打 tag 时自动发 Release, 把 apk 挂上去, 用户就不用自己装 SDK 了
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
+          generate_release_notes: true

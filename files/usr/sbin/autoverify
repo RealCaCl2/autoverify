@@ -1,0 +1,517 @@
+#!/bin/sh
+#
+# autoverify - OpenWrt 校园网门户 (zportal) 自动认证
+#
+# 子命令:
+#   check   仅检测连通性            退出码 0=在线, 1=离线
+#   login   无条件认证一次
+#   once    检测后按需认证一次
+#   daemon  常驻循环, 由 /etc/init.d/autoverify 启动
+#   debug   打印探测与解析结果, 不提交认证
+#
+# 配置: UCI /etc/config/autoverify (读取顺序见 usr/lib/autoverify/cfg.sh)
+#
+# 认证流程:
+#   1. 向 PROBE_URLS 发起明文 HTTP 请求;
+#   2. 未认证时 NAS 把客户端引到登录页。实测这台 NAS 回的是 HTTP 200 且地址藏在
+#      页面内跳转里(不是 302), 且它给的 /zportal/login? 本身还会再 302 一次,
+#      所以 302 / 200+Location / 页面内链接 三种形态都要认, 并跟随多跳;
+#   3. GET 该登录页, 解析出 7 个被服务端加密的隐藏字段;
+#   4. POST /zportal/login/do 提交 username/pwd + 这些隐藏字段, 再跟随 nextPage。
+#
+# 隐藏字段由门户按明文参数加密生成(跨会话恒定), 因此无需复现其加密算法,
+# 每次认证前重新抓取一次登录页即可。
+
+AV_LIB="${AV_LIB:-/usr/lib/autoverify/cfg.sh}"
+# shellcheck disable=SC1090
+if [ ! -r "$AV_LIB" ]; then
+	printf 'autoverify: 找不到 %s\n' "$AV_LIB" >&2
+	exit 1
+fi
+. "$AV_LIB"
+
+# --------------------------------------------------------------- 读取配置 ---
+# 唯一事实来源是 UCI /etc/config/autoverify。
+# 无 uci 命令时(本地测试)自动退回同名环境变量, 再退回默认值。
+
+USERNAME=$(av_cfg main username)
+PASSWORD=$(av_cfg main password)
+PORTAL_HOST=$(av_cfg portal host "")
+PORTAL_PORT=$(av_cfg portal port "9090")
+PORTAL_URL=$(av_cfg portal url)
+PROBE_URLS=$(av_cfg tuning probe_urls "http://connect.rom.miui.com/generate_204 http://connectivitycheck.platform.hicloud.com/generate_204 http://wifi.vivo.com.cn/generate_204")
+EXPECT_CODE=$(av_cfg tuning expect_code "204")
+HTTP_TIMEOUT=$(av_cfg tuning http_timeout "8")
+CHECK_INTERVAL=$(av_cfg tuning check_interval "60")
+RETRY_INTERVAL=$(av_cfg tuning retry_interval "20")
+MAX_RETRY_INTERVAL=$(av_cfg tuning max_retry_interval "300")
+VERBOSE=$(av_cfg_bool tuning verbose "0")
+WAN_IF=$(av_cfg network wan_if)
+
+: "${USER_AGENT:=Mozilla/5.0 (Linux; OpenWrt) autoverify}"
+
+# portal.host 未设置时 base 留空 —— 门户地址靠响应里的 /zportal/ 自动识别。
+# base 只在"响应给的是相对路径"时用来补全, 见 abspath()。
+if [ -z "${PORTAL_BASE:-}" ] && [ -n "$PORTAL_HOST" ]; then
+	PORTAL_BASE="http://${PORTAL_HOST}:${PORTAL_PORT}"
+fi
+PORTAL_BASE="${PORTAL_BASE:-}"
+PORTAL_PATH="/zportal/loginForWeb"
+LOGIN_PATH="/zportal/login/do"
+
+# --------------------------------------------------------------- 基础工具 ---
+
+log() {
+	printf 'autoverify: %s\n' "$*" >&2
+}
+
+logv() {
+	[ "$VERBOSE" = "1" ] && log "$*"
+	return 0
+}
+
+die() {
+	log "错误: $*"
+	exit 1
+}
+
+# 可被 SIGTERM 打断的 sleep。
+# busybox ash 要等前台子进程结束后才处理 trap, 所以把 `sleep 300` 放前台会让
+# `/etc/init.d/autoverify stop` 一直卡到 procd 超时后 SIGKILL; 更糟的是这期间
+# start 已经跑起来了, 会变成两个 daemon 同时发认证请求。
+# 把 sleep 提到后台再 wait: wait 会被信号中断, trap 就能及时执行。
+interruptible_sleep() {
+	sleep "$1" &
+	_sleep_pid=$!
+	wait "$_sleep_pid" 2>/dev/null
+	_sleep_pid=""
+	if [ "$STOP_REQUESTED" = "1" ]; then
+		log "收到停止信号, 退出"
+		exit 0
+	fi
+	return 0
+}
+
+need_curl() {
+	command -v curl >/dev/null 2>&1 && return 0
+	die "未找到 curl, 请先安装: opkg update && opkg install curl"
+}
+
+# 探测一个 URL, 输出 "<http状态码> <重定向目标>" (不跟随重定向)
+# 响应头存到 $TMP/headers, 响应体存到 $TMP/body。
+# 必须存响应头: 实测这台 NAS 不是用 302, 而是回 200, 门户地址既可能在
+# 页面里的 JS 跳转中, 也可能在 200 响应的 Location 头中。
+probe() {
+	curl -s -m "$HTTP_TIMEOUT" -A "$USER_AGENT" \
+		-D "$TMP/headers" -o "$TMP/body" \
+		-w '%{http_code} %{redirect_url}' \
+		"$1" 2>/dev/null
+}
+
+split_probe_result() {
+	case "$1" in
+		*" "*) PROBE_CODE="${1%% *}"; PROBE_LOC="${1#* }" ;;
+		*)    PROBE_CODE="$1";        PROBE_LOC="" ;;
+	esac
+}
+
+# --------------------------------------------------------------- 网络状态 ---
+
+# 离线: 未认证; 返回 0 表示在线
+check_online() {
+	for _u in $PROBE_URLS; do
+		split_probe_result "$(probe "$_u")"
+		logv "探测 $_u -> ${PROBE_CODE:-无响应}${PROBE_LOC:+ (重定向到 $PROBE_LOC)}"
+		[ -n "$PROBE_LOC" ] && continue
+		[ "$PROBE_CODE" = "$EXPECT_CODE" ] && return 0
+	done
+	return 1
+}
+
+# 判断一个 URL 是否指向门户
+#
+# 通用兜底是路径里的 /zportal/ , PORTAL_PATH / PORTAL_HOST 只是额外的提示。
+# 这两个提示为空时必须整条跳过 —— case 的 *""* 能匹配任意字符串, 会把任何地址
+# 都判成门户, 于是第一跳跳转就被当成登录页, 后面全错。
+is_portal_url() {
+	case "$1" in
+		*/zportal/*) return 0 ;;
+	esac
+	if [ -n "$PORTAL_PATH" ]; then
+		case "$1" in *"$PORTAL_PATH"*) return 0 ;; esac
+	fi
+	if [ -n "$PORTAL_HOST" ]; then
+		case "$1" in *"$PORTAL_HOST"*) return 0 ;; esac
+	fi
+	return 1
+}
+
+# 把可能相对的地址补成绝对地址。
+# 基准优先用 portal.host 拼出的 base; 没设就用发起请求的那个地址的 origin
+# —— HTTP 里相对 Location 本来就是相对请求地址解析的。
+# 补不出来就返回非 0, 让调用方走"定位失败"分支,
+# 而不是拿一个 http://:9090/... 这种坏地址去请求。
+abspath() {
+	case "$1" in
+		http://*|https://*) printf '%s\n' "$1"; return 0 ;;
+	esac
+
+	_base="$PORTAL_BASE"
+	if [ -z "$_base" ] && [ -n "${2:-}" ]; then
+		_base=$(printf '%s' "$2" | sed -n 's#^\(https\{0,1\}://[^/]*\).*#\1#p')
+	fi
+	[ -n "$_base" ] || return 1
+	printf '%s%s\n' "$_base" "$1"
+}
+
+# 从文件里提取门户地址。$2 是拿到这份响应的请求地址, 用于补全相对路径。
+# 按可信度依次尝试, 越靠前越可信。
+# 实测 NAS 给的是 /zportal/login?..., 而浏览器地址栏里是 /zportal/loginForWeb?...,
+# 两者都要能认出来; 同时要避免误匹配到 /zportal/js/jquery.js 这类静态资源。
+extract_portal_url() {
+	_p=""
+	for _pat in \
+		"http[^\"'<> ]*loginForWeb[^\"'<> ]*" \
+		"http[^\"'<> ]*/zportal/login[^\"'<> ]*" \
+		"/[^\"'<> ]*loginForWeb[^\"'<> ]*" \
+		"/[^\"'<> ]*/zportal/login[^\"'<> ]*"
+	do
+		_p=$(grep -o "$_pat" "$1" 2>/dev/null | head -n 1)
+		[ -n "$_p" ] && break
+	done
+	if [ -n "$_p" ]; then
+		_p=$(abspath "$_p" "${2:-}") || _p=""
+	fi
+	printf '%s\n' "$_p"
+}
+
+# 从探测结果中找出门户登录页地址
+find_portal_url() {
+	for _u in $PROBE_URLS; do
+		split_probe_result "$(probe "$_u")"
+
+		# a) 3xx 重定向
+		if [ -n "$PROBE_LOC" ] && is_portal_url "$PROBE_LOC"; then
+			printf '%s\n' "$PROBE_LOC"; return 0
+		fi
+
+		# b) 200 响应也可能带 Location 头
+		_loc=$(tr -d '\r' < "$TMP/headers" 2>/dev/null | sed -n 's/^[Ll]ocation:[[:space:]]*//p' | head -n 1)
+		if [ -n "$_loc" ] && is_portal_url "$_loc"; then
+			_loc=$(abspath "$_loc" "$_u") || _loc=""
+			[ -n "$_loc" ] && { printf '%s\n' "$_loc"; return 0; }
+		fi
+
+		# c) 页面内跳转 (meta refresh / JS / 直接输出的链接)
+		_p=$(extract_portal_url "$TMP/body" "$_u")
+		[ -n "$_p" ] && { printf '%s\n' "$_p"; return 0; }
+
+		# d) 多跳重定向: 跟随后取最终地址
+		if [ -n "$PROBE_LOC" ]; then
+			logv "跟随中间跳转: $PROBE_LOC"
+			_p=$(curl -s -L --max-redirs 5 -m "$HTTP_TIMEOUT" -A "$USER_AGENT" \
+				-D "$TMP/headers" -o "$TMP/body" -w '%{url_effective}' "$_u" 2>/dev/null)
+			if is_portal_url "$_p"; then printf '%s\n' "$_p"; return 0; fi
+			_p=$(extract_portal_url "$TMP/body" "$_u")
+			[ -n "$_p" ] && { printf '%s\n' "$_p"; return 0; }
+		fi
+	done
+	return 1
+}
+
+default_if() {
+	if [ -n "$WAN_IF" ]; then
+		printf '%s\n' "$WAN_IF"
+		return 0
+	fi
+	ip route show default 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1
+}
+
+if_ip4() {
+	ip -4 addr show dev "$1" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1
+}
+
+if_mac() {
+	[ -r "/sys/class/net/$1/address" ] && tr -d '\r\n' < "/sys/class/net/$1/address"
+}
+
+# aa:bb:cc:dd:ee:ff -> AABB-CCDD-EEFF
+mac_cisco() {
+	printf '%s' "$1" | tr -d ':' | tr 'a-f' 'A-F' | sed 's/\(....\)/\1-/g; s/-$//'
+}
+
+# --------------------------------------------------------------- HTML 解析 ---
+
+# field <字段名> <已按标签拆行的 HTML 文件>
+# 取 name="<字段名>" 之后的第一个 value="..."。
+# 取“第一个”而非最后一个: HTML 解析器遇到重复属性时保留第一个,
+# 门户的 validCode 输入框就写成了 value="验证码" ... value="",
+# 浏览器实际提交的是前者。
+field() {
+	awk -v key="name=\"$1\"" '
+		{
+			i = index($0, key)
+			if (!i) next
+			rest = substr($0, i + length(key))
+			j = index(rest, "value=\"")
+			if (!j) next
+			rest = substr(rest, j + 7)
+			k = index(rest, "\"")
+			if (!k) next
+			print substr(rest, 1, k - 1)
+			exit
+		}
+	' "$2"
+}
+
+# --------------------------------------------------------------- 认证流程 ---
+
+# 必填字段: 任一缺失说明门户页面结构变了
+LOGIN_FIELDS="ssid mac t wlanacname url nasip wlanuserip"
+DEBUG_ONLY=0
+
+do_login() {
+	if [ "$DEBUG_ONLY" = "0" ]; then
+		[ -n "$USERNAME" ] || die "未配置 USERNAME"
+		[ -n "$PASSWORD" ] || die "未配置 PASSWORD"
+	fi
+
+	# --- 1. 定位门户登录页 ---
+	_purl=""
+	if [ -n "$PORTAL_URL" ]; then
+		_ip=$(if_ip4 "$(default_if)")
+		_purl=$(printf '%s' "$PORTAL_URL" | sed "s/%WANIP%/${_ip:-10.0.0.1}/g")
+		logv "使用配置的登录页地址: $_purl"
+	else
+		_purl=$(find_portal_url)
+		[ -n "$_purl" ] && logv "从重定向解析到登录页: $_purl"
+	fi
+	if [ -z "$_purl" ]; then
+		log "未发现门户重定向, 无法定位认证页"
+		log "  最后探测: HTTP ${PROBE_CODE:-?}  redirect_url=[${PROBE_LOC:-}]"
+		log "  响应头: $(tr -d '\r' < "$TMP/headers" 2>/dev/null | tr '\n' ' ' | head -c 300)"
+		log "  响应体: $(head -c 300 "$TMP/body" 2>/dev/null | tr -d '\r\n')"
+		return 1
+	fi
+
+	_origin=$(printf '%s' "$_purl" | sed -n 's#^\(https\{0,1\}://[^/]*\).*#\1#p')
+	[ -n "$_origin" ] || _origin="$PORTAL_BASE"
+
+	# --- 2. 抓取登录页, 取出隐藏字段 ---
+	# 必须带 -L: NAS 给的门户地址(实测是 /zportal/login?...) 本身还会再跳一次,
+	# 不跟随则只能拿到空 body, 表现为 "无法获取认证页面"。
+	_cj="$TMP/cookies"
+	rm -f "$TMP/page" "$TMP/tags" "$TMP/page_headers"
+	_page_url=$(curl -s -L --max-redirs 5 -m "$HTTP_TIMEOUT" -A "$USER_AGENT" \
+		-c "$_cj" -b "$_cj" -D "$TMP/page_headers" \
+		-o "$TMP/page" -w '%{url_effective}' "$_purl" 2>/dev/null)
+	if [ ! -s "$TMP/page" ]; then
+		log "无法获取认证页面: $_purl"
+		log "  跟随跳转后: ${_page_url:-<无>}"
+		log "  响应头: $(tr -d '\r' < "$TMP/page_headers" 2>/dev/null | tr '\n' ' ' | head -c 300)"
+		return 1
+	fi
+	tr -d '\r' < "$TMP/page" | tr '<' '\n' > "$TMP/tags"
+
+	_missing=""
+	for _f in $LOGIN_FIELDS; do
+		[ -n "$(field "$_f" "$TMP/tags")" ] || _missing="$_missing $_f"
+	done
+	if [ -n "$_missing" ]; then
+		log "认证页缺少字段:$_missing (门户页面结构可能已变更)"
+		return 1
+	fi
+
+	# --- 3. 提交认证 ---
+	if [ "$DEBUG_ONLY" = "1" ]; then
+		echo "  提交地址: $_origin$LOGIN_PATH"
+		echo "  提交字段:"
+		printf '    %s\n' \
+			"qrCodeId=$(field qrCodeId "$TMP/tags")" \
+			"username=$USERNAME" "pwd=***" \
+			"validCode=$(field validCode "$TMP/tags")" "validCodeFlag=false"
+		for _f in $LOGIN_FIELDS; do
+			printf '    %s\n' "$_f=$(field "$_f" "$TMP/tags")"
+		done
+		return 0
+	fi
+
+	# Referer 用跟随跳转后的最终地址(与浏览器一致)
+	_ref="${_page_url:-$_purl}"
+
+	# 字段名、取值和顺序严格对齐浏览器 #login_form.serialize() 的结果。
+	# 注意 qrCodeId / validCode 提交的是页面里的占位文字, 这是浏览器实际行为。
+	set -- -s -m "$HTTP_TIMEOUT" -A "$USER_AGENT" \
+		-o "$TMP/resp" -w '%{http_code}' \
+		-b "$_cj" -c "$_cj" \
+		-H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
+		-H "Origin: $_origin" \
+		-H "Referer: $_ref" \
+		-H 'X-Requested-With: XMLHttpRequest' \
+		--data-urlencode "qrCodeId=$(field qrCodeId "$TMP/tags")" \
+		--data-urlencode "username=$USERNAME" \
+		--data-urlencode "pwd=$PASSWORD" \
+		--data-urlencode "validCode=$(field validCode "$TMP/tags")" \
+		--data-urlencode 'validCodeFlag=false'
+	for _f in $LOGIN_FIELDS; do
+		set -- "$@" --data-urlencode "$_f=$(field "$_f" "$TMP/tags")"
+	done
+	set -- "$@" "$_origin$LOGIN_PATH"
+
+	_code=$(curl "$@" 2>/dev/null)
+	_curl_rc=$?
+	if [ "$_curl_rc" -ne 0 ]; then
+		log "认证请求失败: curl 退出码 $_curl_rc (HTTP ${_code:-?})"
+		return 1
+	fi
+
+	_result=$(sed -n 's/.*"result"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/resp" | head -n 1)
+	_message=$(sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/resp" | head -n 1)
+	_nextpage=$(sed -n 's/.*"nextPage"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TMP/resp" | head -n 1)
+
+	case "$_result" in
+		success)
+			# 浏览器在成功分支会执行 location.href = nextPage, 必须跟上,
+			# 否则门户只是回了 success, 授权并未真正下发到 NAS。
+			follow_next_page "$_origin" "$_cj" "$_nextpage"
+			log "认证成功"
+			return 0
+			;;
+		online)
+			follow_next_page "$_origin" "$_cj" "$_nextpage"
+			log "该 IP 已在线: ${_message:-重复认证}"
+			return 0
+			;;
+	esac
+
+	if [ -z "$_result" ]; then
+		log "认证响应无法解析 (HTTP ${_code:-?}): $(head -c 200 "$TMP/resp" 2>/dev/null | tr -d '\r\n')"
+	else
+		log "认证失败: ${_message:-未知原因} (result=$_result)"
+	fi
+	case "$_message" in
+		*验证码*)
+			log "门户要求输入验证码, 请先在浏览器中成功认证一次以清除失败计数"
+			;;
+		*修改初始密码*)
+			log "门户要求修改初始密码, 请先通过自助服务修改"
+			;;
+	esac
+	return 1
+}
+
+# 跟随门户返回的 nextPage, 与浏览器 location.href = data.nextPage 一致。
+# nextPage 是相对当前页(/zportal/loginForWeb)的路径, 因此拼到 /zportal/ 下。
+follow_next_page() {
+	_origin=$1; _cj=$2; _next=$3
+	[ -n "$_next" ] || return 0
+	case "$_next" in
+		http*) _url="$_next" ;;
+		/*)    _url="$_origin$_next" ;;
+		*)     _url="$_origin/zportal/$_next" ;;
+	esac
+	logv "跟随 nextPage: $_url"
+	curl -s -m "$HTTP_TIMEOUT" -A "$USER_AGENT" -b "$_cj" -c "$_cj" -o /dev/null "$_url" 2>/dev/null
+	return 0
+}
+
+run_once() {
+	if check_online; then
+		logv "在线, 无需认证"
+		return 0
+	fi
+	log "检测到未认证, 开始认证"
+	if do_login; then
+		sleep 2
+		if check_online; then
+			log "认证后连通性验证通过"
+		else
+			log "认证返回成功但连通性仍不通, 请检查 DNS/路由"
+		fi
+		return 0
+	fi
+	return 1
+}
+
+run_daemon() {
+	log "守护进程启动 (在线检查间隔 ${CHECK_INTERVAL}s, 失败重试 ${RETRY_INTERVAL}~${MAX_RETRY_INTERVAL}s)"
+	_delay="$RETRY_INTERVAL"
+	while :; do
+		if check_online; then
+			logv "在线"
+			_delay="$RETRY_INTERVAL"
+			interruptible_sleep "$CHECK_INTERVAL"
+			continue
+		fi
+
+		# 退避以“认证后是否真的通了”为准, 而不是以门户的回包为准。
+		# 实测门户会在会话没真正建立时也回 result=success, 若以此重置退避,
+		# 就会变成每 RETRY_INTERVAL 秒打一次门户。
+		if do_login; then
+			sleep 2
+			if check_online; then
+				log "认证后连通性验证通过"
+				_delay="$RETRY_INTERVAL"
+				interruptible_sleep "$CHECK_INTERVAL"
+				continue
+			fi
+			log "认证返回成功但连通性仍不通"
+		fi
+
+		_delay=$((_delay * 2))
+		[ "$_delay" -gt "$MAX_RETRY_INTERVAL" ] && _delay="$MAX_RETRY_INTERVAL"
+		logv "${_delay}s 后重试"
+		interruptible_sleep "$_delay"
+	done
+}
+
+run_debug() {
+	_wif=$(default_if)
+	echo "== 配置 =="
+	echo "  来源            : UCI /etc/config/autoverify"
+	echo "  账号            : ${USERNAME:-<未设置>}"
+	echo "  探测地址        : $PROBE_URLS"
+	echo "  期望状态码      : $EXPECT_CODE"
+	echo "  门户            : ${PORTAL_BASE:-<未设置, 按地址中的 /zportal/ 自动识别>}"
+	echo "  登录页覆盖      : ${PORTAL_URL:-<未设置, 自动探测>}"
+	echo "  WAN 接口        : ${_wif:-<无默认路由>}"
+	echo "  该接口 IP       : $(if_ip4 "$_wif")"
+	echo "  该接口 MAC      : $(mac_cisco "$(if_mac "$_wif")")"
+	echo "== 连通性 =="
+	if check_online; then
+		echo "  在线 (无需认证)"
+	else
+		echo "  离线 (需要认证)"
+	fi
+	echo "== 认证页与字段 =="
+	DEBUG_ONLY=1
+	do_login
+}
+
+# ------------------------------------------------------------------- 入口 ---
+
+need_curl
+[ -n "$PROBE_URLS" ] || die "PROBE_URLS 为空, 无法判断连通性"
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/autoverify.XXXXXX") || die "无法创建临时目录"
+STOP_REQUESTED=0
+trap 'STOP_REQUESTED=1' INT TERM
+trap 'rm -rf "$TMP"' EXIT
+
+# -v/--verbose: 临时打开详细日志。
+# 必须放在这里: 配置文件会覆盖同名环境变量, 所以 `VERBOSE=1 autoverify once` 在
+# 路由器上是无效的, 要用 `autoverify -v once`。
+case "${1:-}" in
+	-v|--verbose) VERBOSE=1; shift ;;
+esac
+
+case "${1:-once}" in
+	check)  check_online ;;
+	login)  do_login ;;
+	once)   run_once ;;
+	daemon) run_daemon ;;
+	debug)  run_debug ;;
+	*)
+		printf '用法: %s [-v] {check|login|once|daemon|debug}\n' "$0" >&2
+		exit 2
+		;;
+esac

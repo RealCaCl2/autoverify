@@ -1,0 +1,156 @@
+#!/bin/sh
+#
+# autoverify-apply - 把 /etc/config/autoverify 的配置落到系统上
+#
+# 唯一事实来源是 UCI。本脚本是幂等的：重复执行结果一致。
+#
+#   hardening.ttl.enabled -> /etc/nftables.d/20-ttl-normalize.nft
+#   hardening.ntp.enabled -> firewall.ntp_converge + system.ntp.enable_server
+#   hardening.dns.enabled -> firewall.dns_converge_udp / dns_converge_tcp
+#
+# 最后统一做一次 fw4 reload，而不是每个组件各 reload 一次
+# （fw4 reload 会重建整张 nft 表，做三次等于瞬断三次）。
+#
+# 开机时由 /etc/init.d/autoverify 调用。
+
+AV_LIB="${AV_LIB:-/usr/lib/autoverify/cfg.sh}"
+# shellcheck disable=SC1090
+[ -r "$AV_LIB" ] || { printf 'autoverify-apply: 找不到 %s\n' "$AV_LIB" >&2; exit 1; }
+. "$AV_LIB"
+
+NFT_FILE=/etc/nftables.d/20-ttl-normalize.nft
+NTP_SEC="ntp_converge"
+DNS_SEC_UDP="dns_converge_udp"
+DNS_SEC_TCP="dns_converge_tcp"
+
+log() { printf 'autoverify-apply: %s\n' "$*" >&2; }
+
+need_uci() {
+	command -v uci >/dev/null 2>&1 || { log "找不到 uci"; exit 1; }
+}
+
+lan_ip() {
+	_ip=$(uci -q get network.lan.ipaddr)
+	[ -n "$_ip" ] || return 1
+	printf '%s\n' "${_ip%%/*}"
+}
+
+# ---------------------------------------------------------------- TTL ------
+
+apply_ttl() {
+	_lan=$(av_cfg network lan_dev "br-lan")
+	if [ "$(av_cfg_bool ttl enabled 0)" = "1" ]; then
+		_ttl=$(av_cfg ttl ttl "64")
+		case "$_ttl" in ''|*[!0-9]*) log "TTL 值非法: $_ttl，跳过"; return 1 ;; esac
+		mkdir -p /etc/nftables.d
+		cat > "$NFT_FILE" <<EOF
+## 本文件由 /usr/sbin/autoverify-apply 从 UCI 生成, 手工修改会被覆盖。
+## 关闭: uci set autoverify.ttl.enabled='0' && /usr/sbin/autoverify-apply
+##
+## 把从 LAN 转发出去的 IPv4 包 TTL 统一为 $_ttl, 使外部看不到多个终端的 TTL 差异。
+
+chain ttl_normalize {
+	type filter hook postrouting priority -145; policy accept;
+	iifname "$_lan" counter ip ttl set $_ttl comment "ttl-normalize: LAN->WAN TTL=$_ttl"
+}
+EOF
+		return 0
+	fi
+	rm -f "$NFT_FILE"
+	return 0
+}
+
+# 检测流量卸载（被卸载的连接跳过 postrouting，TTL 规则会静默失效）
+warn_offload() {
+	command -v nft >/dev/null 2>&1 || return 0
+	nft list ruleset 2>/dev/null | grep -q flowtable || return 0
+	log "警告: 检测到 flowtable(流量卸载)，被卸载的连接会跳过 postrouting hook，"
+	log "      TTL 改写对它们不执行。关闭方法:"
+	log "        uci set firewall.@defaults[0].flow_offloading='0'"
+	log "        uci set firewall.@defaults[0].flow_offloading_hw='0'"
+}
+
+# ---------------------------------------------------------------- NTP ------
+
+apply_ntp() {
+	_ip=$(lan_ip) || { log "读不到 network.lan.ipaddr"; return 1; }
+
+	if [ "$(av_cfg_bool ntp enabled 0)" = "1" ]; then
+		uci set system.ntp.enable_server='1'
+		_srv=$(av_cfg ntp server)
+		if [ -n "$_srv" ]; then
+			uci -q delete system.ntp.server
+			for _s in $_srv; do uci add_list system.ntp.server="$_s"; done
+		fi
+		uci -q delete "firewall.$NTP_SEC"
+		uci set "firewall.$NTP_SEC"=redirect
+		uci set "firewall.$NTP_SEC".name='ntp-converge'
+		uci set "firewall.$NTP_SEC".src='lan'
+		uci set "firewall.$NTP_SEC".proto='udp'
+		uci set "firewall.$NTP_SEC".src_dport='123'
+		uci set "firewall.$NTP_SEC".dest_ip="$_ip"
+		uci set "firewall.$NTP_SEC".dest_port='123'
+		uci set "firewall.$NTP_SEC".target='DNAT'
+	else
+		uci -q delete "firewall.$NTP_SEC"
+		uci set system.ntp.enable_server='0'
+	fi
+	uci commit system
+	return 0
+}
+
+# ---------------------------------------------------------------- DNS ------
+
+apply_dns() {
+	_ip=$(lan_ip) || { log "读不到 network.lan.ipaddr"; return 1; }
+
+	add_dns_redirect() {
+		_sec="$1"; _proto="$2"
+		uci -q delete "firewall.$_sec"
+		uci set "firewall.$_sec"=redirect
+		uci set "firewall.$_sec".name="dns-converge-$_proto"
+		uci set "firewall.$_sec".src='lan'
+		uci set "firewall.$_sec".proto="$_proto"
+		uci set "firewall.$_sec".src_dport='53'
+		uci set "firewall.$_sec".dest_ip="$_ip"
+		uci set "firewall.$_sec".dest_port='53'
+		uci set "firewall.$_sec".target='DNAT'
+	}
+
+	if [ "$(av_cfg_bool dns enabled 0)" = "1" ]; then
+		# 本机 53 没人听就别开, 否则客户端直接断解析
+		if ! netstat -lnu 2>/dev/null | grep -qE ':53[[:space:]]'; then
+			log "本机 53 端口没有监听(dnsmasq 没跑?)，跳过 DNS 收敛"
+			uci -q delete "firewall.$DNS_SEC_UDP"
+			uci -q delete "firewall.$DNS_SEC_TCP"
+			return 0
+		fi
+		add_dns_redirect "$DNS_SEC_UDP" udp
+		add_dns_redirect "$DNS_SEC_TCP" tcp
+	else
+		uci -q delete "firewall.$DNS_SEC_UDP"
+		uci -q delete "firewall.$DNS_SEC_TCP"
+	fi
+	return 0
+}
+
+# --------------------------------------------------------------- 主流程 -----
+
+main() {
+	need_uci
+
+	apply_ttl
+	apply_ntp
+	apply_dns
+	uci commit firewall
+
+	/etc/init.d/firewall reload >/dev/null 2>&1 || log "firewall reload 失败"
+	/etc/init.d/sysntpd restart >/dev/null 2>&1
+
+	[ "$(av_cfg_bool ttl enabled 0)" = "1" ] && warn_offload
+
+	log "已应用: ttl=$(av_cfg_bool ttl enabled 0) ntp=$(av_cfg_bool ntp enabled 0) dns=$(av_cfg_bool dns enabled 0)"
+	return 0
+}
+
+main

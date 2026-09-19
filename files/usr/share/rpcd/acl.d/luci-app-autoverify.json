@@ -1,0 +1,22 @@
+{
+	"luci-app-autoverify": {
+		"description": "Grant access to autoverify configuration",
+		"read": {
+			"uci": [ "autoverify" ],
+			"file": {
+				"/usr/sbin/autoverify debug": [ "exec" ],
+				"/usr/sbin/autoverify check": [ "exec" ],
+				"/usr/sbin/autoverify -v check": [ "exec" ],
+				"/usr/sbin/autoverify once": [ "exec" ],
+				"/usr/sbin/autoverify -v once": [ "exec" ],
+				"/usr/sbin/autoverify-hardening status": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "autoverify" ],
+			"file": {
+				"/usr/sbin/autoverify-apply": [ "exec" ]
+			}
+		}
+	}
+}

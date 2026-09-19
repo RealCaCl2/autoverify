@@ -1,0 +1,90 @@
+#!/bin/sh
+#
+# autoverify-hardening - 查看/切换各维度的反检测措施
+#
+# 用法:
+#   autoverify-hardening status            总览
+#   autoverify-hardening ttl on [值]       开 TTL 归一化 (默认 64; 128 = 看起来像 Windows)
+#   autoverify-hardening ttl off
+#   autoverify-hardening ntp on|off
+#   autoverify-hardening dns on|off
+#
+# 本脚本只改 /etc/config/autoverify 里的开关, 然后调用 autoverify-apply
+# 把配置落到系统上。真正的事实来源始终是 UCI, 所以也可以用 LuCI 页面或 uci 命令改。
+#
+# 各维度的原理与代价见 docs/detection.md。
+
+AV_LIB="${AV_LIB:-/usr/lib/autoverify/cfg.sh}"
+# shellcheck disable=SC1090
+[ -r "$AV_LIB" ] || { printf 'autoverify-hardening: 找不到 %s\n' "$AV_LIB" >&2; exit 1; }
+. "$AV_LIB"
+
+APPLY=/usr/sbin/autoverify-apply
+NFT_FILE=/etc/nftables.d/20-ttl-normalize.nft
+
+die() { printf 'autoverify-hardening: %s\n' "$*" >&2; exit 1; }
+
+need_uci() { command -v uci >/dev/null 2>&1 || die "找不到 uci"; }
+
+apply() {
+	[ -x "$APPLY" ] || die "找不到 $APPLY"
+	"$APPLY" || die "$APPLY 执行失败"
+}
+
+usage() {
+	cat >&2 <<EOF
+用法: $0 {status|ttl|ntp|dns} [on|off]
+      $0 ttl on [64|128]
+EOF
+	exit 2
+}
+
+do_toggle() {
+	_section="$1"; _action="$2"
+	case "$_action" in
+		on|off) ;;
+		*) usage ;;
+	esac
+	uci set "autoverify.$_section.enabled=$([ "$_action" = on ] && echo 1 || echo 0)"
+	uci commit autoverify
+	apply
+	printf '%s: %s\n' "$_section" "$_action"
+}
+
+case "${1:-status}" in
+status)
+	need_uci
+	_bool() { [ "$(av_cfg_bool "$1" enabled 0)" = "1" ] && printf '启用' || printf '关闭'; }
+	echo "===== 配置 (UCI /etc/config/autoverify) ====="
+	printf '  TTL 归一化 : %s  值=%s\n' "$(_bool ttl)" "$(av_cfg ttl ttl 64)"
+	printf '  NTP 收敛   : %s\n' "$(_bool ntp)"
+	printf '  DNS 收敛   : %s\n' "$(_bool dns)"
+	echo
+	echo "===== 系统实际状态 ====="
+	if [ -e "$NFT_FILE" ]; then
+		echo "  nft 规则文件: 存在"
+	else
+		echo "  nft 规则文件: 不存在"
+	fi
+	if command -v nft >/dev/null 2>&1; then
+		nft list chain inet fw4 ttl_normalize 2>/dev/null | grep -E 'packets|ttl set' | sed 's/^/    /'
+		nft list ruleset 2>/dev/null | grep -E 'ntp-converge|dns-converge' | sed 's/^/    /'
+		nft list ruleset 2>/dev/null | grep -q flowtable && \
+			echo "  ⚠️  检测到 flowtable(流量卸载), TTL 规则会漏掉被卸载的连接"
+	fi
+	printf '  dnsmasq 53 : %s 个 udp 监听\n' "$(netstat -lnu 2>/dev/null | grep -cE ':53[[:space:]]')"
+	printf '  ntpd 123   : %s 个 udp 监听\n' "$(netstat -lnu 2>/dev/null | grep -cE ':123[[:space:]]')"
+	;;
+ttl)
+	need_uci
+	if [ "${2:-}" = "on" ] && [ -n "${3:-}" ]; then
+		case "$3" in ''|*[!0-9]*) die "TTL 必须是数字: $3" ;; esac
+		[ "$3" -ge 1 ] && [ "$3" -le 255 ] || die "TTL 必须在 1..255"
+		uci set "autoverify.ttl.ttl=$3"
+	fi
+	do_toggle ttl "${2:-}"
+	;;
+ntp)    need_uci; do_toggle ntp "${2:-}" ;;
+dns)    need_uci; do_toggle dns "${2:-}" ;;
+*)      usage ;;
+esac

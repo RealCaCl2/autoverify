@@ -1,0 +1,12 @@
+# files/ 下是 OpenWrt 的根文件系统内容 —— #! 脚本、UCI 配置、LuCI 的 JS。
+# 一旦被检出成 CRLF, 路由器上会以 bad interpreter / $'\r': not found 之类的方式炸掉,
+# 而且很难看出原因。所以整个仓库一律按 LF 存储与检出。
+* text=auto eol=lf
+
+# 二进制, 别做行尾转换
+*.apk   binary
+*.ipk   binary
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.zst   binary
