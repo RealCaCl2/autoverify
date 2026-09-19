@@ -282,6 +282,34 @@ mock 仅在 `goToAuthResult` 被请求后才返回 204。
 
 ---
 
+## 相关项目
+
+本项目的加固措施覆盖 **L3 / L4**（TTL、NTP、DNS）。**明文 HTTP 的 User-Agent** 属于 L7，
+本项目不处理。如需覆盖该维度，可使用 [UA-Mask](https://github.com/Zesuy/UA-Mask)。
+
+两者职责不重叠，可以并用：
+
+| 层 | 组件 |
+|---|---|
+| L3 TTL | `autoverify-hardening ttl` |
+| L4 NTP / DNS | `autoverify-hardening ntp` / `dns` |
+| L7 HTTP UA | UA-Mask（外部项目） |
+
+**并用时有两处交互需要注意**（本项目未做自动适配，均为实测得到）：
+
+1. **UA-Mask 的 `bypass_ports` 需加入 `53`。**
+   `autoverify-hardening dns` 会把 LAN 的 `tcp/53` DNAT 到路由器 dnsmasq，UA-Mask 也会重定向 TCP，
+   两者同在 `prerouting`，先匹配者生效。UA-Mask 默认 `bypass_ports` 仅有 `22 443`。
+2. **`autoverify-apply` 每次都会执行 `fw4 reload`。**
+   它管理的是 UCI `firewall.*` 段，UA-Mask 同理（其 init 脚本只删除自身那一段），
+   理论上互不影响，但建议实际验证一轮。
+
+> **许可证注意**：UA-Mask 采用 **GPL-3.0**，与本项目的 MIT **不能合并**。
+> 两者只能作为独立软件并存（各自安装）；若确实需要将其实现并入本项目，
+> 则本项目必须整体改为 GPL-3.0。
+
+---
+
 ## 文档
 
 | 文档 | 内容 |

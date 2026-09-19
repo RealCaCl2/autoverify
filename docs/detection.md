@@ -63,7 +63,7 @@
 
 | # | 方式 | 原理 | 本部署状态 |
 |---|---|---|---|
-| 6 | **HTTP User-Agent** | 统计同一 IP 下出现的不同 UA 数量 | ❌ 未处理。**只对明文 HTTP 有效** |
+| 6 | **HTTP User-Agent** | 统计同一 IP 下出现的不同 UA 数量 | ❌ 本项目未处理。**只对明文 HTTP 有效**。可用 [UA-Mask](https://github.com/Zesuy/UA-Mask) 补上 |
 | 7 | **TLS 指纹 JA3/JA4** | **ClientHello 永远明文**，不同 TLS 库（BoringSSL / NSS / Go crypto/tls）指纹截然不同。JA3 已被现代浏览器随机化削弱，**JA4 仍可区分** | ❌ 未处理。**不需要中间人解密就能做**，是目前最强的单点向量 |
 | 8 | **HTTP/2 SETTINGS 指纹** | SETTINGS 帧参数 + 伪头顺序（Akamai 指纹） | ❌ 未处理 |
 | 9 | **QUIC 指纹（UDP 443）** | 带类 TLS 指纹，且**绕过所有 TCP 改写链路** | ❌ 未处理 |
@@ -103,7 +103,13 @@
 > **检测能抓到的，只有漏出代理的流量。**
 
 所以加固的本质是：**让尽量多流量进代理 + 抑制进不去的流量**，而不是一项项打补丁。
-本部署目前是"打补丁"路线（TTL + NTP），属于部分覆盖。
+本部署目前是“打补丁”路线（TTL + NTP），属于部分覆盖。
+
+> **更新**：ua3f 已有继任者 **[UA-Mask](https://github.com/Zesuy/UA-Mask)**（GPL-3.0，Go）。
+> 它保留了“全流量进代理 + L3/L4 指纹统一”的思路，并用动态 `ipset`/`nfset` 卸载
+> 非 HTTP 流量，把硬路由上的性能代价压了下来。**若要转“架构”路线，它是目前的现实选择。**
+>
+> ⚠️ 但它**仍只改明文 HTTP 的 UA**，HTTPS 里的 UA 改不了（不做中间人解密）。
 
 ---
 
@@ -129,6 +135,7 @@
 |---|---|---|
 | 统一 TTL | 对外 traceroute/mtr 只剩第一跳 | 需先关 flow offloading，否则静默失效 |
 | 统一 UA | 站点按 UA 分发内容会出错（手机拿到桌面版）；**默认值 `FFF` 是占位符，不换成真实主流 UA 反而更显眼** | HTTPS 里的 UA 改不了（除非中间人解密） |
+| 全流量代理（UA-Mask） | 需额外常驻进程 + 一套 nft 规则；默认绕过 22/443，其余 TCP 进代理；与现有 DNS/NTP 规则存在顺序交互 | 明文 HTTP 的 UA 才改得动；JA3/JA4 不变 |
 | 清除 TCP 时间戳 | 需用户态代理 | 直连流量仍泄露 |
 | IPID 改写 | 需编译内核模块 `kmod-rkp-ipid`，要重编固件 | — |
 | NTP 收敛 | 路由器时钟不准则全体不准；路由器离线时上游同步停止 | — |
@@ -176,6 +183,15 @@ uci commit firewall && /etc/init.d/firewall restart
 
 实测：关掉 offload + 几乎全部 TCP 进用户态代理，MT7621 这类双核 mipsel 上
 单核负载直接上 1.1（≈满载），高带宽场景明显降速、延迟抖动。
+
+⚠️ **但这条对 [UA-Mask](https://github.com/Zesuy/UA-Mask) 不完全适用** —— 它用
+“流量卸载”（把判定为非 HTTP 的 `ip:port` 加进 `ipset`/`nfset`，由防火墙层直接 RETURN）
+正面处理了这个问题。官方在 MIPS 硬路由上实测 iperf3 上/下行约 **97 / 78 Mbps**，
+并称对 P2P / Steam / 加密代理等重流量可降 80%+ CPU。这是它相对早期 ua3f / UA2F 的
+关键改进。
+
+不过仍有上限：受限于设备本身，且对**持续的原生 HTTPS 流量**（既不命中卸载、
+也不命中 UA 白名单）仍然全程走用户态。
 
 ---
 
@@ -227,6 +243,7 @@ netstat -lnu | grep ':123'
 | `autoverify-hardening ttl` | 第一节 #1（TTL） |
 | `autoverify-hardening ntp` | 第二节 #10（NTP） |
 | `autoverify-hardening dns` | 第二节 #12（DNS） |
+| [UA-Mask](https://github.com/Zesuy/UA-Mask)（外部项目，GPL-3.0） | 第二节 #6（HTTP UA），并把 L3/L4 指纹统一到路由器 |
 | 其余 | **未覆盖**，见上文状态表 |
 
 再次强调：**当前这所学校的检测只是"账号并发会话数"（按 IP 记账，NAT 后即已解决），
@@ -256,6 +273,7 @@ netstat -lnu | grep ':123'
 
 - SunBK201《关于某大学校园网共享上网检测机制的研究与解决方案》— https://blog.sunbk201.site/posts/crack-campus-network
 - SunBK201/UA3F — https://github.com/SunBK201/UA3F
+- Zesuy/UA-Mask（ua3f 继任者，Go + 动态流量卸载）— https://github.com/Zesuy/UA-Mask
 - 《校园网防止多设备检测指北》（褐瞳）— https://www.hetong-re4per.com/posts/multi-device-detection/
 - 《重庆大学校园网多设备检测对抗实战（OpenWrt + ua3f）》— https://lucky-z.fun/p/1e43e556.html
 - un-nf/404 eBPF TCP/IP Fingerprint Editor — https://deepwiki.com/un-nf/404/6-ebpf-tcpip-fingerprint-editor
