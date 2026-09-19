@@ -42,7 +42,7 @@
 
 ## 适配其他学校
 
-多数 **zportal**（卓智 / 深澜）学校无需额外配置即可使用：
+多数 **zportal**（卓智）学校无需额外配置即可使用：
 
 - 门户地址不写死：由响应中的 `/zportal/` 自动识别（`portal.host` 留空即可）
 - `wlanuserip` / `mac` / `nasip` / `wlanacname` / `ssid` 均从 NAS 响应中实时提取，

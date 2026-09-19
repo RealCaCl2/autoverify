@@ -3,11 +3,11 @@
 > 这是 [autoverify](../README.md) 的实现依据。全部结论来自对真实门户的抓包与探测，
 > 不是从文档抄的。在别的学校遇到差异时，这一节能帮你定位是哪里不一样。
 >
-> 实测环境：淮安大学校园网 `iHuaiGong-Student`（卓智 / 深澜 zportal）。
+> 实测环境：淮安大学校园网 `iHuaiGong-Student`（卓智 zportal）。
 
 ---
 
-门户：`http://10.82.66.10:9090/zportal/`（卓智/深澜 zportal，Tomcat）
+门户：`http://10.82.66.10:9090/zportal/`（卓智 zportal，Tomcat）
 
 **1. 未认证时，门户用“200 + 页面内跳转”把客户端引到登录页（不是 302）。**
 
