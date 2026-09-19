@@ -88,7 +88,7 @@ apply_ntp() {
 		uci set "firewall.$NTP_SEC".src='lan'
 		uci set "firewall.$NTP_SEC".proto='udp'
 		uci set "firewall.$NTP_SEC".src_dport='123'
-		uci set "firewall.$NTP_SEC".dest_ip="$_ip"
+		uci set "firewall.$NTP_SEC.dest_ip=$_ip"
 		uci set "firewall.$NTP_SEC".dest_port='123'
 		uci set "firewall.$NTP_SEC".target='DNAT'
 	else
@@ -108,11 +108,11 @@ apply_dns() {
 		_sec="$1"; _proto="$2"
 		uci -q delete "firewall.$_sec"
 		uci set "firewall.$_sec"=redirect
-		uci set "firewall.$_sec".name="dns-converge-$_proto"
+		uci set "firewall.$_sec.name=dns-converge-$_proto"
 		uci set "firewall.$_sec".src='lan'
-		uci set "firewall.$_sec".proto="$_proto"
+		uci set "firewall.$_sec.proto=$_proto"
 		uci set "firewall.$_sec".src_dport='53'
-		uci set "firewall.$_sec".dest_ip="$_ip"
+		uci set "firewall.$_sec.dest_ip=$_ip"
 		uci set "firewall.$_sec".dest_port='53'
 		uci set "firewall.$_sec".target='DNAT'
 	}

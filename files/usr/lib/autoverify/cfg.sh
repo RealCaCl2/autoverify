@@ -22,6 +22,9 @@ av_cfg() {
 		# 始终带段前缀是因为 enabled / url / port 这类选项名在多个段里重名,
 		# 而且 PORT / URL 是极常见的环境变量名, 不带前缀会误命中。
 		# 无 uci 命令时(本地测试)才走这条路径。option 名均为 [a-z_], 无注入风险。
+		# 必须用 a-z / A-Z 区间写法: busybox 的 tr 默认未启用 FEATURE_TR_CLASSES,
+		# '[:lower:]' / '[:upper:]' 会静默地不做任何转换(已在跑 OpenWrt 的路由器上实测)。
+		# shellcheck disable=SC2018,SC2019
 		_av_var="$(printf '%s' "$1" | tr 'a-z' 'A-Z')_$(printf '%s' "$2" | tr 'a-z' 'A-Z')"
 		eval "_av_v=\${$_av_var:-}"
 	fi

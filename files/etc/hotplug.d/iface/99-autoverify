@@ -9,7 +9,6 @@
 # 用配置读取库拿 hotplug_if（netifd 接口名，如 wwan），
 # 注意它和 network.wan_if（netdev 名，如 phy1-sta0）不是同一个命名空间。
 AV_LIB="${AV_LIB:-/usr/lib/autoverify/cfg.sh}"
-AV_PKG=autoverify
 [ -r "$AV_LIB" ] && . "$AV_LIB"
 
 if command -v av_cfg >/dev/null 2>&1; then

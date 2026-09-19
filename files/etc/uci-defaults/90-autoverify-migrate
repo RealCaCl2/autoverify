@@ -6,7 +6,9 @@
 [ -f /etc/autoverify.conf ] || exit 0
 
 USERNAME=""; PASSWORD=""; PORTAL_HOST=""; PORTAL_PORT=""; PORTAL_URL=""
-PROBE_URLS=""; WAN_IF=""; HOTPLUG_IF=""; CHECK_INTERVAL=""; RETRY_INTERVAL=""; VERBOSE=""
+PROBE_URLS=""; EXPECT_CODE=""; HTTP_TIMEOUT=""
+CHECK_INTERVAL=""; RETRY_INTERVAL=""; MAX_RETRY_INTERVAL=""; VERBOSE=""
+WAN_IF=""; HOTPLUG_IF=""
 # shellcheck disable=SC1091
 . /etc/autoverify.conf
 
@@ -16,6 +18,12 @@ PROBE_URLS=""; WAN_IF=""; HOTPLUG_IF=""; CHECK_INTERVAL=""; RETRY_INTERVAL=""; V
 [ -n "$PORTAL_PORT" ]  && uci set autoverify.portal.port="$PORTAL_PORT"
 [ -n "$PORTAL_URL" ]   && uci set autoverify.portal.url="$PORTAL_URL"
 [ -n "$PROBE_URLS" ]   && uci set autoverify.tuning.probe_urls="$PROBE_URLS"
+[ -n "$EXPECT_CODE" ]  && uci set autoverify.tuning.expect_code="$EXPECT_CODE"
+[ -n "$HTTP_TIMEOUT" ] && uci set autoverify.tuning.http_timeout="$HTTP_TIMEOUT"
+[ -n "$CHECK_INTERVAL" ]     && uci set autoverify.tuning.check_interval="$CHECK_INTERVAL"
+[ -n "$RETRY_INTERVAL" ]     && uci set autoverify.tuning.retry_interval="$RETRY_INTERVAL"
+[ -n "$MAX_RETRY_INTERVAL" ] && uci set autoverify.tuning.max_retry_interval="$MAX_RETRY_INTERVAL"
+[ -n "$VERBOSE" ]            && uci set autoverify.tuning.verbose="$VERBOSE"
 [ -n "$WAN_IF" ]       && uci set autoverify.network.wan_if="$WAN_IF"
 [ -n "$HOTPLUG_IF" ]   && uci set autoverify.network.hotplug_if="$HOTPLUG_IF"
 uci commit autoverify

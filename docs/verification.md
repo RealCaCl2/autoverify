@@ -5,8 +5,7 @@
 
 ---
 
-已在真实环境（淮安大学，原淮阴工学院 / Xiaomi Mi Router 4A Gigabit v2 /
-OpenWrt 25.12.5 / STA 连 `iHuaiGong-Student`）跑通：
+已在真实环境（淮安大学校园网 / Xiaomi Mi Router 4A Gigabit v2 / OpenWrt 25.12.5 / STA 连 `iHuaiGong-Student`）跑通：
 
 - 连通性探测、WAN 自动识别（`phy1-sta0` / `10.80.3.64`）
 - 从 NAS 的 200 响应里解析出 `/zportal/login?...`，跨两跳拿到登录页
