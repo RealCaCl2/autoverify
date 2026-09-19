@@ -49,7 +49,16 @@ MAX_RETRY_INTERVAL=$(av_cfg tuning max_retry_interval "300")
 VERBOSE=$(av_cfg_bool tuning verbose "0")
 WAN_IF=$(av_cfg network wan_if)
 
-: "${USER_AGENT:=Mozilla/5.0 (Linux; OpenWrt) autoverify}"
+# 请求 User-Agent。
+#
+# 探测走的是明文 HTTP, 校园网 DPI 直接看得见这个头, 所以它绝不能自报家门。
+# 旧值 "Mozilla/5.0 (Linux; OpenWrt) autoverify" 等于每 60 秒对外广播一次
+# "这台设备跑着 OpenWrt 和一个叫 autoverify 的工具"。
+# 也不能换成虚构或过时的 UA —— 那种组合本身同样显眼, 要用真实且当前主流的串。
+#
+# 应与 UA-Mask 的 UAmask.main.ua 一致: 探测流量与 NAT 后的客户端流量同源同 IP,
+# 两边 UA 不同就等于告诉对面这台机器上住着两种浏览器。
+USER_AGENT=$(av_cfg tuning user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
 
 # portal.host 未设置时 base 留空 —— 门户地址靠响应里的 /zportal/ 自动识别。
 # base 只在"响应给的是相对路径"时用来补全, 见 abspath()。

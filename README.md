@@ -296,6 +296,11 @@ mock 仅在 `goToAuthResult` 被请求后才返回 204。
 本项目的加固措施覆盖 **L3 / L4**（TTL、NTP、DNS）。**明文 HTTP 的 User-Agent** 属于 L7，
 本项目不处理。如需覆盖该维度，可使用 [UA-Mask](https://github.com/Zesuy/UA-Mask)。
 
+> **但本项目自己的出站 UA 是伪装的。**探测走的是明文 HTTP，校园网 DPI 直接看得见，
+> 所以 `tuning.user_agent` 默认是一个真实的当前主流 Chrome UA。
+> 它与 UA-Mask 的 `UAmask.main.ua` **应当保持一致** —— 探测流量和 NAT 后的客户端流量
+> 同源同 IP，两边 UA 不同本身就等于告诉对面：这台机器上住着两种浏览器。
+
 两者职责不重叠，可以并用：
 
 | 层 | 组件 |

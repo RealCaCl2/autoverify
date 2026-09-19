@@ -111,6 +111,14 @@ return view.extend({
 			  '判定"在线" = 状态码等于下面的期望值，且没有被重定向。'));
 		o.rmempty = false;
 
+		o = s.option(form.Value, 'user_agent', _('请求 User-Agent'),
+			_('发出所有 HTTP 请求时带的 UA。探测走明文 HTTP，校园网直接看得见，' +
+			  '所以不能填任何带 OpenWrt 或本项目名字的串，也不要填虚构/过时的 UA。' +
+			  '建议与 UA-Mask 的 UA 保持一致 —— 两边不同，等于告诉对方这里住着两种浏览器。'));
+		o.default = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+			'(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+		o.rmempty = false;
+
 		o = s.option(form.Value, 'expect_code', _('期望状态码'), _('generate_204 类地址填 204'));
 		o.default = '204';
 		o.datatype = 'uinteger';
