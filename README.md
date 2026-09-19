@@ -169,8 +169,17 @@ logread -f -e autoverify     # Ctrl-C 退出
 /usr/sbin/autoverify check; echo $?     # 0=在线 1=离线
 /usr/sbin/autoverify once               # 检测后按需认证一次
 /usr/sbin/autoverify -v once            # 输出详细日志
+/usr/sbin/autoverify update-check       # 0=已是最新 1=有新版本 2=查询失败
 /usr/sbin/autoverify-hardening status   # 加固措施开关 + 系统实际状态
 ```
+
+`update-check` 查 GitHub Releases 并与本机包版本比对，**只读**：不下载、不安装、
+不改任何配置。比对用的是 Release 里 apk 资产名中的版本号（与包版本同一套编号），
+而不是 tag —— 两者并不对应（如 tag `v1.0.2` 对应包版本 `1.0.0-r7`），
+拿 tag 比会永远报“有新版本”。
+
+查询走 GitHub API，未认证时限流 **60 次/小时/IP**，手动点一下完全够用。
+https 不通或仓库无 Release 时会明确报错并返回 2。
 
 `-v` 必须以参数形式传入：UCI 是唯一事实来源，环境变量仅在不存在 `uci` 命令时作为回退，
 因此在路由器上 `VERBOSE=1 autoverify once` 不会生效。
@@ -213,7 +222,7 @@ logread -f -e autoverify     # Ctrl-C 退出
 | TTL 归一化 | 开关 + TTL 值（64 / 128 下拉选择） |
 | NTP 收敛 | 开关 + 上游服务器列表 |
 | DNS 收敛 | 开关 |
-| 操作 | 立即认证一次 / 检测连通性 / 查看加固状态 / 将要提交的认证字段（输出+退出码弹窗） |
+| 操作 | 立即认证一次 / 检测连通性 / 查看加固状态 / 检查更新 / 将要提交的认证字段（输出+退出码弹窗） |
 
 四个按钮均以 `-v` 调用并显示退出码：`autoverify check` / `once` **在正常情况下不产生
 任何输出**（仅以退出码表示结果），仅捕获 stdout 会得到空弹窗，无法区分成功、离线

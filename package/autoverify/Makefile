@@ -11,7 +11,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autoverify
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=4
+PKG_RELEASE:=7
 
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=CaCl2 <RealCaCl2@users.noreply.github.com>
@@ -62,6 +62,7 @@ define Package/autoverify/install
 	$(INSTALL_BIN)  ./files/usr/sbin/autoverify-apply     $(1)/usr/sbin/
 	$(INSTALL_BIN)  ./files/usr/sbin/autoverify-hardening $(1)/usr/sbin/
 	$(INSTALL_DATA) ./files/usr/lib/autoverify/cfg.sh     $(1)/usr/lib/autoverify/
+	$(INSTALL_BIN)  ./files/usr/lib/autoverify/refresh-luci-cache.sh $(1)/usr/lib/autoverify/
 
 	$(INSTALL_BIN)  ./files/etc/init.d/autoverify                     $(1)/etc/init.d/
 	$(INSTALL_BIN)  ./files/etc/hotplug.d/iface/99-autoverify         $(1)/etc/hotplug.d/iface/
@@ -74,6 +75,17 @@ define Package/autoverify/install
 
 	# 配置里有账号密码, 收紧权限
 	chmod 600 $(1)/etc/config/autoverify
+endef
+
+# 刷新 LuCI 视图的 mtime，否则升级后浏览器会继续用缓存的旧 JS。
+#
+# 具体逻辑和原因放在 files/usr/lib/autoverify/refresh-luci-cache.sh 里，
+# 这里只负责调用它 —— 避免在 Makefile 里嵌 shell 变量，那样 $ 的转义层数
+# 很容易写错，而且写错了很难看出来（生成的 scriptlet 在编译后被清掉了）。
+define Package/autoverify/postinst
+#!/bin/sh
+/usr/lib/autoverify/refresh-luci-cache.sh
+exit 0
 endef
 
 $(eval $(call BuildPackage,autoverify))

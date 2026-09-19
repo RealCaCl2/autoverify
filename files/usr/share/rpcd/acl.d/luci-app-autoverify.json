@@ -9,6 +9,7 @@
 				"/usr/sbin/autoverify -v check": [ "exec" ],
 				"/usr/sbin/autoverify once": [ "exec" ],
 				"/usr/sbin/autoverify -v once": [ "exec" ],
+				"/usr/sbin/autoverify update-check": [ "exec" ],
 				"/usr/sbin/autoverify-hardening status": [ "exec" ]
 			}
 		},

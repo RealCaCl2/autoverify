@@ -229,7 +229,16 @@ return view.extend({
 					'click': ui.createHandlerFn(this, 'handleAction',
 						'/usr/sbin/autoverify-hardening', [ 'status' ],
 						_('查看加固状态'))
-				}, _('查看加固状态'))
+				}, _('查看加固状态')),
+				' ',
+				E('button', {
+					'class': 'btn cbi-button',
+					'click': ui.createHandlerFn(this, 'handleAction',
+						'/usr/sbin/autoverify', [ 'update-check' ],
+						_('检查更新'),
+						_('退出码 0 = 已是最新，1 = 有新版本，2 = 查询失败。' +
+						  '查询 GitHub Releases，只读，不会自动安装。'))
+				}, _('检查更新'))
 			]),
 			E('div', { 'class': 'cbi-value' }, [
 				E('button', {
