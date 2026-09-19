@@ -295,14 +295,26 @@ mock 仅在 `goToAuthResult` 被请求后才返回 204。
 | L4 NTP / DNS | `autoverify-hardening ntp` / `dns` |
 | L7 HTTP UA | UA-Mask（外部项目） |
 
-**并用时有两处交互需要注意**（本项目未做自动适配，均为实测得到）：
+**并用时的交互**（以下结论来自对其 `init.d/UAmask` 源码与本项目实际规则的比对，
+**未在本环境实测**，启用前建议自行验证）：
 
-1. **UA-Mask 的 `bypass_ports` 需加入 `53`。**
-   `autoverify-hardening dns` 会把 LAN 的 `tcp/53` DNAT 到路由器 dnsmasq，UA-Mask 也会重定向 TCP，
-   两者同在 `prerouting`，先匹配者生效。UA-Mask 默认 `bypass_ports` 仅有 `22 443`。
-2. **`autoverify-apply` 每次都会执行 `fw4 reload`。**
-   它管理的是 UCI `firewall.*` 段，UA-Mask 同理（其 init 脚本只删除自身那一段），
-   理论上互不影响，但建议实际验证一轮。
+- **TCP 会先被 UA-Mask 截走。**其入站链声明为
+  `type nat hook prerouting priority dstnat - 1`，**刻意排在 fw4 的 `dstnat` 链之前**，
+  因此优先于本项目 `dns-converge-*` / `ntp-converge` 所用的 UCI `redirect` 规则。
+- **只有 TCP 受影响。**它的规则只匹配 `ip protocol tcp`，所以
+  `ntp-converge`（udp/123）与 `dns-converge-udp`（udp/53）不受影响。
+- **实际受影响的是“发往非局域网服务器的 TCP DNS”。**它的规则带
+  `ip daddr != { bypass_ips }`（默认含局域网）与 `tcp dport != { 22 443 }`，
+  所以查询路由器自身（`192.168.1.1`）会被豁免；仅当 `tcp/53` 指向外部解析器时
+  才会被重定向进代理，从而绕过本项目的 DNS 收敛。
+  **建议把 `53` 加入它的 `bypass_ports`。**
+- **防火墙规则互不覆盖。**本项目用 UCI `redirect` 段，它用 UCI `include` 段
+  （`firewall.UAmask`），其卸载逻辑只删除自身那一段，因此双方的 `fw4 reload`
+  不会清掉对方。
+- **启动顺序值得留意。**本项目 `START=95`，UA-Mask `START=99`，即本项目的
+  `autoverify-apply` 会先执行一次 `fw4 reload`；而它的 include 指向
+  `/tmp/UAmask_rules.nft`。正常关机时该段会被清除，但**异常断电可能残留
+  指向缺失文件的 include 段**。
 
 > **许可证注意**：UA-Mask 采用 **GPL-3.0**，与本项目的 MIT **不能合并**。
 > 两者只能作为独立软件并存（各自安装）；若确实需要将其实现并入本项目，
