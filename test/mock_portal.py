@@ -157,7 +157,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         delay = os.environ.get("MOCK_POST_DELAY", "")
         if delay:
             time.sleep(float(delay))
-        self._send(200, os.environ.get("MOCK_RESP", DEFAULT_RESP))
+        response = os.environ.get("MOCK_RESP", DEFAULT_RESP)
+        if '"result":"online"' in response:
+            # 已在线的门户响应本身表示 NAS 已有有效会话，不依赖 nextPage。
+            STATE["online"] = True
+        self._send(200, response)
 
     def log_message(self, *args):
         pass
