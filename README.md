@@ -169,12 +169,17 @@ logread -f -e autoverify     # Ctrl-C 退出
 
 ```sh
 /usr/sbin/autoverify debug              # 只读: 打印配置/连通性/待提交字段，不提交认证
+/usr/sbin/autoverify validate           # 只读: 校验配置与本机依赖，不发起认证
 /usr/sbin/autoverify check; echo $?     # 0=在线 1=离线
 /usr/sbin/autoverify once               # 检测后按需认证一次
 /usr/sbin/autoverify -v once            # 输出详细日志
 /usr/sbin/autoverify update-check       # 0=已是最新 1=有新版本 2=查询失败
 /usr/sbin/autoverify-hardening status   # 加固措施开关 + 系统实际状态
 ```
+
+`validate` 返回码为 `0=配置有效`、`1=配置错误`、`2=环境不完整`。它不会访问门户、修改
+UCI 或防火墙；输出只包含错误/警告，不包含密码。认证运行态摘要写入
+`/var/run/autoverify/status`，最近一次脱敏结果写入 `/var/lib/autoverify/last-result`。
 
 `update-check` 查 GitHub Releases 并与本机包版本比对，**只读**：不下载、不安装、
 不改任何配置。比对用的是 Release 里 apk 资产名中的版本号（与包版本同一套编号），

@@ -115,6 +115,38 @@ check() {
 	echo "    [OK]"
 }
 
+echo "=========== 0. 配置校验 ==========="
+_validate_out=$(sh "$SCRIPT" validate 2>&1)
+_validate_rc=$?
+printf '%s\n' "$_validate_out" | sed 's/^/    /'
+if [ "$_validate_rc" = "0" ] && ! printf '%s\n' "$_validate_out" | grep -qF "$MAIN_PASSWORD"; then
+	echo "    [OK] 有效配置通过且不输出密码"
+else
+	echo "    [FAIL] 有效配置校验失败或泄露密码"; FAILED=1
+fi
+
+_port_save="$PORTAL_PORT"
+PORTAL_PORT=65536
+_validate_out=$(sh "$SCRIPT" validate 2>&1)
+_validate_rc=$?
+PORTAL_PORT="$_port_save"
+if [ "$_validate_rc" = "1" ] && printf '%s\n' "$_validate_out" | grep -q 'portal.port'; then
+	echo "    [OK] 非法端口被拒绝"
+else
+	echo "    [FAIL] 非法端口未被拒绝"; FAILED=1
+fi
+
+_ttl_save="${TTL_TTL:-64}"
+export TTL_TTL=0
+_validate_out=$(sh "$SCRIPT" validate 2>&1)
+_validate_rc=$?
+export TTL_TTL="$_ttl_save"
+if [ "$_validate_rc" = "1" ] && printf '%s\n' "$_validate_out" | grep -q 'ttl.ttl'; then
+	echo "    [OK] 非法 TTL 被拒绝"
+else
+	echo "    [FAIL] 非法 TTL 未被拒绝"; FAILED=1
+fi
+
 echo "=========== 1. 认证成功 ==========="
 start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
 check "probe 302 -> 抓登录页 -> 提交 -> 跟随 nextPage -> 204 复核" 0 "认证后连通性验证通过"

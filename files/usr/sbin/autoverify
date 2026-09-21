@@ -625,6 +625,130 @@ run_debug() {
 	do_login
 }
 
+# ---------------------------------------------------------------- 配置校验 ---
+
+validate_error() {
+	printf '  错误: %s\n' "$*"
+	VALIDATE_ERRORS=$((VALIDATE_ERRORS + 1))
+}
+
+validate_warn() {
+	printf '  警告: %s\n' "$*"
+	VALIDATE_WARNINGS=$((VALIDATE_WARNINGS + 1))
+}
+
+validate_bool() {
+	case "$2" in
+		0|1|on|off|true|false|yes|no|enabled|disabled) ;;
+		*) validate_error "$1 必须是布尔值" ;;
+	esac
+}
+
+validate_uint() {
+	case "$2" in
+		''|*[!0-9]*) validate_error "$1 必须是正整数"; return 1 ;;
+	esac
+	[ "$2" -gt 0 ] || validate_error "$1 必须大于 0"
+}
+
+validate_range() {
+	_name=$1; _value=$2; _min=$3; _max=$4
+	case "$_value" in
+		''|*[!0-9]*) validate_error "$_name 必须是数字"; return 1 ;;
+	esac
+	if [ "$_value" -lt "$_min" ] || [ "$_value" -gt "$_max" ]; then
+		validate_error "$_name 必须在 $_min..$_max 范围内"
+	fi
+}
+
+validate_url_list() {
+	_count=0
+	for _u in $1; do
+		_count=$((_count + 1))
+		case "$_u" in
+			http://?*|https://?*) ;;
+			*) validate_error "探测 URL 不支持或为空: $_u" ;;
+		esac
+	done
+	[ "$_count" -gt 0 ] || validate_error "probe_urls 不能为空"
+}
+
+run_validate() {
+	VALIDATE_ERRORS=0
+	VALIDATE_WARNINGS=0
+	VALIDATE_ENV_ERRORS=0
+	echo "== 配置校验 =="
+
+	validate_bool "main.enabled" "$(av_cfg main enabled "1")"
+	[ -n "$USERNAME" ] || validate_error "main.username 不能为空"
+	[ -n "$PASSWORD" ] || validate_error "main.password 不能为空"
+	validate_range "portal.port" "$PORTAL_PORT" 1 65535
+	validate_range "tuning.expect_code" "$EXPECT_CODE" 100 599
+	validate_uint "tuning.http_timeout" "$HTTP_TIMEOUT"
+	validate_uint "tuning.check_interval" "$CHECK_INTERVAL"
+	validate_uint "tuning.retry_interval" "$RETRY_INTERVAL"
+	validate_uint "tuning.max_retry_interval" "$MAX_RETRY_INTERVAL"
+	if [ "$RETRY_INTERVAL" -gt 0 ] 2>/dev/null && \
+		[ "$MAX_RETRY_INTERVAL" -gt 0 ] 2>/dev/null && \
+		[ "$RETRY_INTERVAL" -gt "$MAX_RETRY_INTERVAL" ]; then
+		validate_error "tuning.retry_interval 不能大于 max_retry_interval"
+	fi
+	validate_bool "tuning.lock_enabled" "$(av_cfg tuning lock_enabled "1")"
+	validate_uint "tuning.lock_max_age" "$LOCK_MAX_AGE"
+	validate_bool "tuning.state_enabled" "$(av_cfg tuning state_enabled "1")"
+	validate_url_list "$PROBE_URLS"
+	[ -n "$USER_AGENT" ] || validate_error "tuning.user_agent 不能为空"
+
+	if [ -n "$PORTAL_URL" ]; then
+		case "$PORTAL_URL" in
+			http://?*|https://?*) ;;
+			*) validate_error "portal.url 必须使用 http:// 或 https://" ;;
+		 esac
+	fi
+
+	if [ "$(av_cfg_bool ttl enabled "1")" = "1" ]; then
+		validate_range "ttl.ttl" "$(av_cfg ttl ttl "64")" 1 255
+	fi
+	validate_bool "ttl.enabled" "$(av_cfg ttl enabled "1")"
+	validate_bool "ntp.enabled" "$(av_cfg ntp enabled "1")"
+	validate_bool "dns.enabled" "$(av_cfg dns enabled "1")"
+	validate_bool "dhcp.enabled" "$(av_cfg_bool dhcp enabled "1")"
+	validate_bool "ipv6.enabled" "$(av_cfg_bool ipv6 enabled "1")"
+
+	if ! command -v curl >/dev/null 2>&1; then
+		printf '  环境错误: 未找到 curl\n'
+		VALIDATE_ENV_ERRORS=$((VALIDATE_ENV_ERRORS + 1))
+	fi
+	if ! command -v ip >/dev/null 2>&1; then
+		validate_warn "未找到 ip，无法检查接口实际存在性"
+	elif [ -n "$WAN_IF" ] && ! ip link show "$WAN_IF" >/dev/null 2>&1; then
+		validate_warn "network.wan_if 指定的接口不存在: $WAN_IF"
+	fi
+	if [ -n "$(av_cfg network lan_dev "br-lan")" ] && command -v ip >/dev/null 2>&1; then
+		_lan_dev=$(av_cfg network lan_dev "br-lan")
+		ip link show "$_lan_dev" >/dev/null 2>&1 || validate_warn "LAN 接口不存在: $_lan_dev"
+	fi
+	if [ -f /etc/config/autoverify ] && command -v stat >/dev/null 2>&1; then
+		_mode=$(stat -c '%a' /etc/config/autoverify 2>/dev/null || true)
+		case "$_mode" in
+			600|0600) ;;
+			'') validate_warn "无法读取 /etc/config/autoverify 权限" ;;
+			*) validate_error "/etc/config/autoverify 权限应为 600，当前为 $_mode" ;;
+		esac
+	fi
+
+	if [ "$VALIDATE_ERRORS" -gt 0 ]; then
+		echo "结论: 配置无效 ($VALIDATE_ERRORS 个错误, $VALIDATE_WARNINGS 个警告)"
+		return 1
+	fi
+	if [ "$VALIDATE_ENV_ERRORS" -gt 0 ]; then
+		echo "结论: 环境不完整 ($VALIDATE_WARNINGS 个警告)"
+		return 2
+	fi
+	echo "结论: 配置有效 ($VALIDATE_WARNINGS 个警告)"
+	return 0
+}
+
 # ----------------------------------------------------------------- 工具 ----
 
 # 从 JSON 文本里取一个字符串字段。输出是压缩成一行的, 所以不能简单地贪心匹配。
@@ -758,9 +882,10 @@ case "${1:-once}" in
 	once)   run_once ;;
 	daemon) run_daemon ;;
 	debug)  run_debug ;;
+	validate) run_validate ;;
 	update-check) cmd_update_check ;;
 	*)
-		printf '用法: %s [-v] {check|login|once|daemon|debug|update-check}\n' "$0" >&2
+		printf '用法: %s [-v] {check|login|once|daemon|debug|validate|update-check}\n' "$0" >&2
 		exit 2
 		;;
 esac
