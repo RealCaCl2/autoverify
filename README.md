@@ -1,9 +1,12 @@
-# autoverify
+# joywise-autoverify
 
-[![CI](https://github.com/RealCaCl2/autoverify/actions/workflows/ci.yml/badge.svg)](https://github.com/RealCaCl2/autoverify/actions/workflows/ci.yml)
+[![CI](https://github.com/RealCaCl2/joywise-autoverify/actions/workflows/ci.yml/badge.svg)](https://github.com/RealCaCl2/joywise-autoverify/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-校园网门户（**卓智**）的 OpenWrt 自动认证程序，含 LuCI 设置页面。
+校园网门户（**卓智**）的 OpenWrt 自动认证程序，项目名为 **joywise-autoverify**，含 LuCI 设置页面。
+
+> 兼容性说明：项目展示名已更名为 `joywise-autoverify`；为兼容已安装设备，运行时命令、APK
+> 包名和 UCI 配置命名空间仍保留 `autoverify`。
 
 纯 POSIX sh 实现，无编译依赖，运行时仅需 `curl`。断线自动重认证，出口接口 up 时立即认证。
 

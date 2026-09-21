@@ -79,7 +79,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: autoverify-apk
+          name: joywise-autoverify-apk
           path: dist/*.apk
           if-no-files-found: error
 

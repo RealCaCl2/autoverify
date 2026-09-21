@@ -1,8 +1,8 @@
-# autoverify Agent Guide
+# joywise-autoverify Agent Guide
 
 ## 项目边界
 
-`autoverify` 是面向 OpenWrt 的卓智（zportal）校园网自动认证插件，运行时以 POSIX
+`joywise-autoverify`（运行时命令/包名仍为 `autoverify`）是面向 OpenWrt 的卓智（zportal）校园网自动认证插件，运行时以 POSIX
 `sh` 和 `curl` 为核心，LuCI 只负责配置和诊断入口。项目同时包含 TTL、NTP、DNS、DHCP
 和 IPv6 加固能力；这些能力可能违反网络管理方的使用规定，任何改动都必须保持显式开关、
 可回滚，并避免扩大网络流量的控制范围。

@@ -1,6 +1,6 @@
 # zportal 协议说明（实测所得）
 
-> 这是 [autoverify](../README.md) 的实现依据。全部结论来自对真实门户的抓包与探测，
+> 这是 [joywise-autoverify](../README.md) 的实现依据。运行时命令仍为 `autoverify`；全部结论来自对真实门户的抓包与探测，
 > 不是从文档抄的。在别的学校遇到差异时，这一节能帮你定位是哪里不一样。
 >
 > 实测环境：淮安大学校园网 `iHuaiGong-Student`（卓智 zportal）。

@@ -15,7 +15,7 @@ PKG_RELEASE:=12
 
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=CaCl2 <RealCaCl2@users.noreply.github.com>
-PKG_URL:=https://github.com/RealCaCl2/autoverify
+PKG_URL:=https://github.com/RealCaCl2/joywise-autoverify
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -23,7 +23,7 @@ define Package/autoverify
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Captive Portals
-  TITLE:=Campus portal (zportal) auto authentication + anti-detection hardening
+  TITLE:=Joywise campus portal (zportal) auto authentication + anti-detection hardening
   DEPENDS:=+curl +luci-base
   PKGARCH:=all
 endef
