@@ -24,6 +24,7 @@ config autoverify 'tuning'
 	option lock_enabled '1'
 	option lock_max_age '300'
 	option state_enabled '1'
+	option nextpage_strict '1'
 	# 请求 User-Agent。探测是明文 HTTP, 校园网 DPI 看得见 —— 不要带任何能标识
 	# 本项目或 OpenWrt 的字样, 也不要填虚构/过时的串。
 	option user_agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'

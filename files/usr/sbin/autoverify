@@ -67,6 +67,7 @@ VERBOSE=$(av_cfg_bool tuning verbose "0")
 LOCK_ENABLED=$(av_cfg_bool tuning lock_enabled "1")
 LOCK_MAX_AGE=$(av_cfg tuning lock_max_age "300")
 STATE_ENABLED=$(av_cfg_bool tuning state_enabled "1")
+NEXTPAGE_STRICT=$(av_cfg_bool tuning nextpage_strict "1")
 WAN_IF=$(av_cfg network wan_if)
 
 # 仅供本地测试覆盖；设备上固定使用 /var/run/autoverify。
@@ -438,12 +439,16 @@ do_login() {
 		success)
 			# 浏览器在成功分支会执行 location.href = nextPage, 必须跟上,
 			# 否则门户只是回了 success, 授权并未真正下发到 NAS。
-			follow_next_page "$_origin" "$_cj" "$_nextpage"
+			if ! follow_next_page "$_origin" "$_cj" "$_nextpage"; then
+				return 1
+			fi
 			log "认证成功"
 			return 0
 			;;
 		online)
-			follow_next_page "$_origin" "$_cj" "$_nextpage"
+			if ! follow_next_page "$_origin" "$_cj" "$_nextpage"; then
+				return 1
+			fi
 			log "该 IP 已在线: ${_message:-重复认证}"
 			return 0
 			;;
@@ -512,19 +517,75 @@ run_auth_locked() {
 	return 0
 }
 
+# 取 URL 的 origin，不包含路径、查询串或片段。
+url_origin() {
+	printf '%s' "${1:-}" | sed -n 's#^\(https\{0,1\}://[^/?]*\).*#\1#p' | head -n 1
+}
+
 # 跟随门户返回的 nextPage, 与浏览器 location.href = data.nextPage 一致。
-# nextPage 是相对当前页(/zportal/loginForWeb)的路径, 因此拼到 /zportal/ 下。
+# 严格模式下只允许相对地址或当前门户 origin 的绝对 HTTP(S) 地址，避免认证成功响应
+# 把路由器带到第三方地址；同时不把完整查询串写入日志。
 follow_next_page() {
 	_origin=$1; _cj=$2; _next=$3
-	[ -n "$_next" ] || return 0
 	av_state_phase following
-	case "$_next" in
-		http*) _url="$_next" ;;
-		/*)    _url="$_origin$_next" ;;
-		*)     _url="$_origin/zportal/$_next" ;;
+	if [ -z "$_next" ]; then
+		if [ "$NEXTPAGE_STRICT" = "1" ]; then
+			AUTH_ERROR_CODE=E_NEXT_PAGE; AUTH_ERROR_STAGE=nextpage
+			log "认证响应缺少 nextPage, 未继续授权流程"
+			return 1
+		fi
+		logv "认证响应未提供 nextPage, 按兼容模式跳过"
+		return 0
+	fi
+	_next_len=$(printf '%s' "$_next" | wc -c | tr -d ' ')
+	case "$_next_len" in
+		''|*[!0-9]*) _next_len=0 ;;
 	esac
-	logv "跟随 nextPage: $_url"
-	curl -s -m "$HTTP_TIMEOUT" -A "$USER_AGENT" -b "$_cj" -c "$_cj" -o /dev/null "$_url" 2>/dev/null
+	if [ "$_next_len" -gt 2048 ]; then
+		AUTH_ERROR_CODE=E_NEXT_PAGE; AUTH_ERROR_STAGE=nextpage
+		log "nextPage 过长, 已拒绝"
+		return 1
+	fi
+	case "$_next" in
+		http://*|https://*)
+		_url="$_next"
+		if [ "$NEXTPAGE_STRICT" = "1" ] && [ "$(url_origin "$_url")" != "$_origin" ]; then
+			AUTH_ERROR_CODE=E_NEXT_PAGE; AUTH_ERROR_STAGE=nextpage
+			log "nextPage 指向外部门户 origin, 已拒绝"
+			return 1
+		fi
+		;;
+		/*)    _url="$_origin$_next" ;;
+		*)
+			case "$_next" in
+				*:*|*\\*)
+					AUTH_ERROR_CODE=E_NEXT_PAGE; AUTH_ERROR_STAGE=nextpage
+					log "nextPage 不是合法的相对 HTTP 路径, 已拒绝"
+					return 1
+					;;
+				*) _url="$_origin/zportal/$_next" ;;
+			esac
+	esac
+	case "$_url" in
+		http://*|https://*) ;;
+		*)
+			AUTH_ERROR_CODE=E_NEXT_PAGE; AUTH_ERROR_STAGE=nextpage
+			log "nextPage 无法解析为 HTTP(S) 地址, 已拒绝"
+			return 1
+			;;
+	esac
+	_log_url=$(printf '%s' "$_url" | sed 's/[?#].*//')
+	logv "跟随 nextPage: $_log_url"
+	_code=$(curl -s -m "$HTTP_TIMEOUT" -A "$USER_AGENT" -b "$_cj" -c "$_cj" \
+		-o /dev/null -w '%{http_code}' "$_url" 2>/dev/null)
+	_curl_rc=$?
+	AUTH_HTTP_CODE="$_code"
+	AV_STATE_HTTP_CODE="$_code"
+	if [ "$_curl_rc" -ne 0 ] || [ "$_code" = "000" ] || [ "$_code" -ge 400 ] 2>/dev/null; then
+		AUTH_ERROR_CODE=E_NEXT_PAGE; AUTH_ERROR_STAGE=nextpage
+		log "nextPage 请求失败: curl=$_curl_rc HTTP=${_code:-?}"
+		return 1
+	fi
 	return 0
 }
 
@@ -696,6 +757,7 @@ run_validate() {
 	validate_bool "tuning.lock_enabled" "$(av_cfg tuning lock_enabled "1")"
 	validate_uint "tuning.lock_max_age" "$LOCK_MAX_AGE"
 	validate_bool "tuning.state_enabled" "$(av_cfg tuning state_enabled "1")"
+	validate_bool "tuning.nextpage_strict" "$(av_cfg tuning nextpage_strict "1")"
 	validate_url_list "$PROBE_URLS"
 	[ -n "$USER_AGENT" ] || validate_error "tuning.user_agent 不能为空"
 

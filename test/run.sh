@@ -42,7 +42,8 @@ start_mock() {
 		exit 1
 	fi
 
-	MOCK_RESP="$1" MOCK_POST_DELAY="${MOCK_POST_DELAY:-}" MOCK_PID_FILE="$RUN_DIR/mock.pid" \
+	MOCK_RESP="$1" MOCK_POST_DELAY="${MOCK_POST_DELAY:-}" MOCK_NEXT_MODE="${MOCK_NEXT_MODE:-}" \
+		MOCK_PID_FILE="$RUN_DIR/mock.pid" \
 		"$PY" "$ROOT/test/mock_portal.py" "$PORT" > "$TMPOUT" 2>&1 &
 	MOCK_PID=$!
 
@@ -224,6 +225,21 @@ stop_mock
 echo "=========== 5. 返回非 JSON ==========="
 start_mock '<html>502 Bad Gateway</html>'
 check "应报出无法解析并带原始响应" 1 "认证响应无法解析"
+stop_mock
+
+echo "=========== 5a. 缺少 nextPage ==========="
+start_mock '{"message":"","result":"success"}'
+check "严格模式下缺少 nextPage 应失败" 1 "nextPage"
+stop_mock
+
+echo "=========== 5b. 外部 nextPage ==========="
+start_mock '{"message":"","nextPage":"http://example.com/notice","result":"success"}'
+check "严格模式下外部 nextPage 不应访问" 1 "外部门户"
+stop_mock
+
+echo "=========== 5c. nextPage 请求失败 ==========="
+MOCK_NEXT_MODE=fail start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
+check "nextPage HTTP 失败应传播为认证失败" 1 "nextPage 请求失败"
 stop_mock
 
 # 下面两个用例对应真实 NAS 的形态。实测这台 NAS 未认证时回 200 而不是 302,

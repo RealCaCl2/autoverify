@@ -189,6 +189,10 @@ UCI 或防火墙；输出只包含错误/警告，不包含密码。认证运行
 查询走 GitHub API，未认证时限流 **60 次/小时/IP**，手动点一下完全够用。
 https 不通或仓库无 Release 时会明确报错并返回 2。
 
+认证互斥、运行状态和 `nextPage` 严格校验默认开启；对应的 `tuning.lock_enabled`、
+`tuning.state_enabled`、`tuning.nextpage_strict` 缺失时使用兼容默认值。严格校验拒绝外部
+origin、非 HTTP(S) 地址、过长地址，并会把 `nextPage` 请求的 curl/HTTP 失败返回为认证失败。
+
 `-v` 必须以参数形式传入：UCI 是唯一事实来源，环境变量仅在不存在 `uci` 命令时作为回退，
 因此在路由器上 `VERBOSE=1 autoverify once` 不会生效。
 

@@ -114,6 +114,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith("/zportal/loginForWeb"):
             self._send(200, LOGIN_PAGE, extra=[("Set-Cookie", "JSESSIONID=MOCK; Path=/zportal/")])
         elif self.path.startswith("/zportal/goToAuthResult"):
+            if os.environ.get("MOCK_NEXT_MODE", "") == "fail":
+                self._send(503, "认证结果页暂不可用")
+                return
             STATE["online"] = True
             self._send(200, "<html>认证结果页</html>")
         else:
