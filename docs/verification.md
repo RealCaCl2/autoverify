@@ -36,12 +36,51 @@
 当前检测强度：**只有“账号并发会话数”**，而且是按 IP 记账的，NAT 后已经解决。
 其余检测方式（见 [detection.md](detection.md)）没有证据表明在启用。
 
+---
+
+## 2026-09-21：r13 -> r14（LuCI 界面改版）实机验证
+
+设备：Xiaomi Mi Router 4A Gigabit v2 / OpenWrt 25.12.5（`r33051-f5dae5ece4`）/ ramips-mt7621 /
+`luci-base 26.180.75667` / argon 主题。
+构建：WSL Ubuntu 26.04 + OpenWrt SDK 25.12.5（ramips/mt7621），`bash tools/build-apk.sh`
+产出 `autoverify-1.0.0-r14.apk`（38140 字节，md5 `dd922023d771cbef185377ef859e5ff5`）。
+
+- **apk 升级 r13 -> r14**：`apk add --allow-untrusted` 返回 0，输出
+  `Upgrading autoverify (1.0.0-r13 -> 1.0.0-r14)`。包内 14 个文件里 12 个与仓库工作区
+  **MD5 逐个一致**；另两个差异均可解释且符合预期：`/etc/config/autoverify` 保留了设备上
+  已有的真实配置（逐字节未变，包内默认值另存为 `autoverify.apk-new`），
+  `/etc/uci-defaults/90-autoverify-migrate` 已在安装时执行并被删除。
+- **升级未中断服务**：升级前后 procd 实例 PID 均为 7772，`/etc/init.d/autoverify status`
+  为 running；`validate` / `status --json` / `check` 退出码均为 0，`validate` 结论为
+  “配置有效 (0 个警告)”。
+- **LuCI 视图文件**：经 HTTP 取到 200 / 26832 字节，md5 与仓库一致；包内 postinst
+  已刷新 mtime，浏览器不会再拿到旧 JS（实测两个地址都可取到）。
+- **新页面用到的 LuCI API 在该版本上确实存在**（不靠记忆假定）：`form.js` 含
+  `SectionValue` / `subsection` / `taboption`；`luci.js` 注册了 `dom` / `poll` 类
+  （该版本已无独立的 `poll.js` / `dom.js` 文件）、`Poll.add`、`L.resolveDefault`；
+  `rpc.js` 含 `declare`；`ui.js` 自身就在调用 `dom.content`。
+- **数据契约**：`status --json` 的全部字段（含新面板读取的 20 个）在设备上均存在。
+- **argon 主题兼容性**（本次两个真实坑）：argon **不提供** LuCI 26 的设计 token
+  （`--background-color-low` / `--text-color-high` 等出现 0 次），带 fallback 写死浅色会在
+  暗色主题下变成一块突兑的浅色 —— 所以页面自定义样式只用边框、透明度和继承色；
+  argon 支持选项卡（`.cbi-tabmenu` / `[data-tab-title]`）；并且无 `title` 的 option
+  根本不会渲染标题列（`form.js` 里对 `typeof title === 'string' && title !== ''` 做了判断），
+  所以不需要（也不应该）用 CSS 去“隐藏空标题列”。
+- **实测到的既有缺陷（本次未修，已改写界面避开）**：`status --json` 的 `daemon_pid` /
+  `daemon_count` 来自 `pidof autoverify`，而 busybox 的 `pidof` 按脚本名匹配，
+  **会把发起查询的进程自身（及其子 shell）一起数进去** —— 实测设备上只有 1 个守护进程
+  （PID 7772）时，`status --json` 报 `daemon_pid=24242`（即本次查询自己的 PID）、
+  `daemon_count=3`。命令行的 daemon PID/数量因此不可信；LuCI 面板已改为读 procd 状态。
+
 仍是推测、没单独验证过的：
 
-- ⚠️ **LuCI 页面的实际渲染效果**。验证手段到此为止（无浏览器），
-  表单细节如有渲染问题需要你打开看一眼，看 F12 控制台报什么错。
+- ⚠️ **LuCI 页面的实际渲染效果**：本次已在设备上核实了 API 存在、文件可经 HTTP 取到、
+  数据字段齐备，但**没有在浏览器里真正看过**这个新页面（无浏览器环境），
+  选项卡切换、按钮与弹窗、暗色模式仍需人工看一眼（F12 控制台有无报错）。
 - **开机自启**：`S95autoverify` 软链已建，但没重启过路由器验证。
 - **hotplug 钩子**：出口接口 up 时立即认证这一条没单独触发过。
 - **daemon 无人值守循环**：与手动 `once` 走同一套函数，但没在真实掉线时
   完整观察过它自己恢复。另外手动跑 `once` 时日志只进终端（`log()` 写 stderr），
   不进 syslog；只有 daemon 的日志会被 procd 转发到 syslog。
+- **回滚路径**：本次只用过文件级“还原 HEAD 版本”来回退中间状态，没有用 `apk` 真正
+  降级过一次版本。

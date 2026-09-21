@@ -82,8 +82,13 @@ CI 还会解析两个 LuCI JSON 文件并运行 ShellCheck。构建 APK 需要 O
 
 本轮已按 `PLAN.md` 的依赖顺序完成认证互斥、运行状态、配置校验、nextPage 安全处理、
 只读 status/audit、LuCI 诊断入口、门户解析兼容性、运维文档和 CI/包清单检查；每个主题
-均有独立提交。完整 mock 回归已在本地 Git Bash 通过。
+均有独立提交。完整 mock 回归已在本地 Git Bash 与 WSL 通过。
 
-SDK APK 构建、BusyBox 实机、真实 LuCI 浏览器和 OpenWrt 安装/升级/回滚仍是待执行验收，
-不能用本地 Windows 结果替代。连接实机时只使用用户已配置的 SSH 公钥/别名，不在对话中
-接收 root 密码或私钥。
+此后又完成一版 LuCI 界面改版（选项卡 + 只读运行状态面板 + 操作区分组，并新增一条
+`autoverify status --json` 的只读 ACL），并把 **SDK APK 构建**与 **OpenWrt 实机安装/升级**
+执行完毕：设备上 r13 -> r14 升级成功，包内文件与仓库 MD5 逐个核对（除 conffile 与已执行
+的 uci-defaults 外全部一致），实测记录见 `docs/verification.md`。
+
+真实 LuCI 浏览器渲染（选项卡切换、按钮弹窗、暗色模式）、hotplug 触发、daemon 无人
+值守恢复、以及 apk 降级回滚仍是待执行验收，不能用本地 Windows 结果替代。
+连接实机时只使用用户已配置的 SSH 公钥/别名，不在对话中接收 root 密码或私钥。
