@@ -63,6 +63,7 @@ define Package/autoverify/install
 	$(INSTALL_BIN)  ./files/usr/sbin/autoverify-hardening $(1)/usr/sbin/
 	$(INSTALL_DATA) ./files/usr/lib/autoverify/cfg.sh     $(1)/usr/lib/autoverify/
 	$(INSTALL_DATA) ./files/usr/lib/autoverify/lock.sh   $(1)/usr/lib/autoverify/
+	$(INSTALL_DATA) ./files/usr/lib/autoverify/state.sh  $(1)/usr/lib/autoverify/
 	$(INSTALL_BIN)  ./files/usr/lib/autoverify/refresh-luci-cache.sh $(1)/usr/lib/autoverify/
 
 	$(INSTALL_BIN)  ./files/etc/init.d/autoverify                     $(1)/etc/init.d/

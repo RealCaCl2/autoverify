@@ -30,6 +30,8 @@ jobs:
                    files/usr/sbin/autoverify-apply \
                    files/usr/sbin/autoverify-hardening \
                    files/usr/lib/autoverify/cfg.sh \
+                   files/usr/lib/autoverify/lock.sh \
+                   files/usr/lib/autoverify/state.sh \
                    files/etc/init.d/autoverify \
                    files/etc/hotplug.d/iface/99-autoverify \
                    files/etc/uci-defaults/90-autoverify-migrate \
@@ -45,6 +47,7 @@ jobs:
           shellcheck -s sh -e SC1090,SC1091 \
             files/usr/sbin/autoverify files/usr/sbin/autoverify-apply \
             files/usr/sbin/autoverify-hardening files/usr/lib/autoverify/cfg.sh \
+            files/usr/lib/autoverify/lock.sh files/usr/lib/autoverify/state.sh \
             files/etc/init.d/autoverify files/etc/hotplug.d/iface/99-autoverify \
             files/etc/uci-defaults/90-autoverify-migrate test/run.sh
 

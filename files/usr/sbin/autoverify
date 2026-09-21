@@ -40,6 +40,14 @@ if [ ! -r "$AV_LOCK_LIB" ]; then
 fi
 . "$AV_LOCK_LIB"
 
+AV_STATE_LIB="${AV_STATE_LIB:-${AV_LIB%/*}/state.sh}"
+# shellcheck disable=SC1090
+if [ ! -r "$AV_STATE_LIB" ]; then
+	printf 'autoverify: 找不到 %s\n' "$AV_STATE_LIB" >&2
+	exit 1
+fi
+. "$AV_STATE_LIB"
+
 # --------------------------------------------------------------- 读取配置 ---
 # 唯一事实来源是 UCI /etc/config/autoverify。
 # 无 uci 命令时(本地测试)自动退回同名环境变量, 再退回默认值。
@@ -58,10 +66,14 @@ MAX_RETRY_INTERVAL=$(av_cfg tuning max_retry_interval "300")
 VERBOSE=$(av_cfg_bool tuning verbose "0")
 LOCK_ENABLED=$(av_cfg_bool tuning lock_enabled "1")
 LOCK_MAX_AGE=$(av_cfg tuning lock_max_age "300")
+STATE_ENABLED=$(av_cfg_bool tuning state_enabled "1")
 WAN_IF=$(av_cfg network wan_if)
 
 # 仅供本地测试覆盖；设备上固定使用 /var/run/autoverify。
 LOCK_ROOT="${AUTOVERIFY_RUN_DIR:-/var/run/autoverify}"
+AV_STATE_ENABLED="$STATE_ENABLED"
+AV_STATE_DIR="$LOCK_ROOT"
+AV_STATE_PERSIST_DIR="${AUTOVERIFY_STATE_DIR:-/var/lib/autoverify}"
 AUTOVERIFY_SOURCE="${AUTOVERIFY_SOURCE:-manual}"
 
 # 请求 User-Agent。
@@ -294,14 +306,31 @@ field() {
 # 必填字段: 任一缺失说明门户页面结构变了
 LOGIN_FIELDS="ssid mac t wlanacname url nasip wlanuserip"
 DEBUG_ONLY=0
+AUTH_ERROR_CODE=""
+AUTH_ERROR_STAGE=""
+AUTH_HTTP_CODE=""
+AUTH_ORIGIN=""
 
 do_login() {
+	AUTH_ERROR_CODE=""
+	AUTH_ERROR_STAGE=""
+	AUTH_HTTP_CODE=""
+	AUTH_ORIGIN=""
 	if [ "$DEBUG_ONLY" = "0" ]; then
-		[ -n "$USERNAME" ] || die "未配置 USERNAME"
-		[ -n "$PASSWORD" ] || die "未配置 PASSWORD"
+		if [ -z "$USERNAME" ]; then
+			AUTH_ERROR_CODE=E_CONFIG; AUTH_ERROR_STAGE=config
+			log "未配置 USERNAME"
+			return 1
+		fi
+		if [ -z "$PASSWORD" ]; then
+			AUTH_ERROR_CODE=E_CONFIG; AUTH_ERROR_STAGE=config
+			log "未配置 PASSWORD"
+			return 1
+		fi
 	fi
 
 	# --- 1. 定位门户登录页 ---
+	av_state_phase discovering
 	_purl=""
 	if [ -n "$PORTAL_URL" ]; then
 		_ip=$(if_ip4 "$(default_if)")
@@ -312,6 +341,7 @@ do_login() {
 		[ -n "$_purl" ] && logv "从重定向解析到登录页: $_purl"
 	fi
 	if [ -z "$_purl" ]; then
+		AUTH_ERROR_CODE=E_PORTAL_NOT_FOUND; AUTH_ERROR_STAGE=portal
 		log "未发现门户重定向, 无法定位认证页"
 		log "  最后探测: HTTP ${PROBE_CODE:-?}  redirect_url=[${PROBE_LOC:-}]"
 		log "  响应头: $(tr -d '\r' < "$TMP/headers" 2>/dev/null | tr '\n' ' ' | head -c 300)"
@@ -321,8 +351,11 @@ do_login() {
 
 	_origin=$(printf '%s' "$_purl" | sed -n 's#^\(https\{0,1\}://[^/]*\).*#\1#p')
 	[ -n "$_origin" ] || _origin="$PORTAL_BASE"
+	AUTH_ORIGIN="$_origin"
+	AV_STATE_ORIGIN="$_origin"
 
 	# --- 2. 抓取登录页, 取出隐藏字段 ---
+	av_state_phase fetching
 	# 必须带 -L: NAS 给的门户地址(实测是 /zportal/login?...) 本身还会再跳一次,
 	# 不跟随则只能拿到空 body, 表现为 "无法获取认证页面"。
 	_cj="$TMP/cookies"
@@ -330,7 +363,9 @@ do_login() {
 	_page_url=$(curl -s -L --max-redirs 5 -m "$HTTP_TIMEOUT" -A "$USER_AGENT" \
 		-c "$_cj" -b "$_cj" -D "$TMP/page_headers" \
 		-o "$TMP/page" -w '%{url_effective}' "$_purl" 2>/dev/null)
-	if [ ! -s "$TMP/page" ]; then
+	_page_curl_rc=$?
+	if [ "$_page_curl_rc" -ne 0 ] || [ ! -s "$TMP/page" ]; then
+		AUTH_ERROR_CODE=E_LOGIN_PAGE; AUTH_ERROR_STAGE=page
 		log "无法获取认证页面: $_purl"
 		log "  跟随跳转后: ${_page_url:-<无>}"
 		log "  响应头: $(tr -d '\r' < "$TMP/page_headers" 2>/dev/null | tr '\n' ' ' | head -c 300)"
@@ -343,11 +378,13 @@ do_login() {
 		[ -n "$(field "$_f" "$TMP/tags")" ] || _missing="$_missing $_f"
 	done
 	if [ -n "$_missing" ]; then
+		AUTH_ERROR_CODE=E_LOGIN_FIELDS; AUTH_ERROR_STAGE=page
 		log "认证页缺少字段:$_missing (门户页面结构可能已变更)"
 		return 1
 	fi
 
 	# --- 3. 提交认证 ---
+	av_state_phase submitting
 	if [ "$DEBUG_ONLY" = "1" ]; then
 		echo "  提交地址: $_origin$LOGIN_PATH"
 		echo "  提交字段:"
@@ -385,7 +422,10 @@ do_login() {
 
 	_code=$(curl "$@" 2>/dev/null)
 	_curl_rc=$?
+	AUTH_HTTP_CODE="$_code"
+	AV_STATE_HTTP_CODE="$_code"
 	if [ "$_curl_rc" -ne 0 ]; then
+		AUTH_ERROR_CODE=E_LOGIN_REQUEST; AUTH_ERROR_STAGE=submit
 		log "认证请求失败: curl 退出码 $_curl_rc (HTTP ${_code:-?})"
 		return 1
 	fi
@@ -410,8 +450,10 @@ do_login() {
 	esac
 
 	if [ -z "$_result" ]; then
+		AUTH_ERROR_CODE=E_LOGIN_RESPONSE; AUTH_ERROR_STAGE=submit
 		log "认证响应无法解析 (HTTP ${_code:-?}): $(head -c 200 "$TMP/resp" 2>/dev/null | tr -d '\r\n')"
 	else
+		AUTH_ERROR_CODE=E_LOGIN_RESPONSE; AUTH_ERROR_STAGE=submit
 		log "认证失败: ${_message:-未知原因} (result=$_result)"
 	fi
 	case "$_message" in
@@ -429,6 +471,7 @@ do_login() {
 # 这样 hotplug 风暴不会在后台堆积多个等待进程。
 run_auth_locked() {
 	_operation=${1:-once}
+	_keep_lock=${2:-0}
 	if [ "$LOCK_ENABLED" = "1" ]; then
 		auth_lock_acquire "$AUTOVERIFY_SOURCE" "$_operation"
 		_lock_rc=$?
@@ -446,11 +489,27 @@ run_auth_locked() {
 	fi
 
 	AUTH_ACTIVE=1
+	av_state_begin "$AUTOVERIFY_SOURCE" "$_operation" checking
 	do_login
 	_auth_rc=$?
+	if [ "$_auth_rc" != "0" ]; then
+		AUTH_ACTIVE=0
+		av_state_finish failed failed "${AUTH_ERROR_CODE:-E_LOGIN_REQUEST}" \
+			"${AUTH_ERROR_STAGE:-submit}" "$AUTH_HTTP_CODE" "$AUTH_ORIGIN"
+		auth_lock_release
+		return "$_auth_rc"
+	fi
+	if [ "$_keep_lock" = "1" ]; then
+		# once/daemon 还要在锁内完成最终连通性验证，避免第二个入口在
+		# nextPage 成功但 NAS 尚未授权的窗口内再次提交认证。
+		return 0
+	fi
 	AUTH_ACTIVE=0
+	if [ "$_operation" = "login" ]; then
+		av_state_finish online success "" "" "$AUTH_HTTP_CODE" "$AUTH_ORIGIN"
+	fi
 	auth_lock_release
-	return "$_auth_rc"
+	return 0
 }
 
 # 跟随门户返回的 nextPage, 与浏览器 location.href = data.nextPage 一致。
@@ -458,6 +517,7 @@ run_auth_locked() {
 follow_next_page() {
 	_origin=$1; _cj=$2; _next=$3
 	[ -n "$_next" ] || return 0
+	av_state_phase following
 	case "$_next" in
 		http*) _url="$_next" ;;
 		/*)    _url="$_origin$_next" ;;
@@ -474,16 +534,24 @@ run_once() {
 		return 0
 	fi
 	log "检测到未认证, 开始认证"
-	if run_auth_locked once; then
+	run_auth_locked once 1
+	_auth_rc=$?
+	if [ "$_auth_rc" = "0" ]; then
+		av_state_phase verifying
 		sleep 2
+		_verify_rc=0
 		if check_online; then
+			av_state_finish online success "" "" "$AUTH_HTTP_CODE" "$AUTH_ORIGIN"
 			log "认证后连通性验证通过"
 		else
+			av_state_finish failed failed E_VERIFY_OFFLINE verify "$AUTH_HTTP_CODE" "$AUTH_ORIGIN"
 			log "认证返回成功但连通性仍不通, 请检查 DNS/路由"
+			_verify_rc=1
 		fi
-		return 0
+		AUTH_ACTIVE=0
+		auth_lock_release
+		return "$_verify_rc"
 	fi
-	_auth_rc=$?
 	[ "$_auth_rc" = "3" ] && return 3
 	return 1
 }
@@ -502,15 +570,22 @@ run_daemon() {
 		# 退避以“认证后是否真的通了”为准, 而不是以门户的回包为准。
 		# 实测门户会在会话没真正建立时也回 result=success, 若以此重置退避,
 		# 就会变成每 RETRY_INTERVAL 秒打一次门户。
-		if run_auth_locked daemon; then
+		if run_auth_locked daemon 1; then
+			av_state_phase verifying
 			sleep 2
 			if check_online; then
+				av_state_finish online success "" "" "$AUTH_HTTP_CODE" "$AUTH_ORIGIN"
 				log "认证后连通性验证通过"
 				_delay="$RETRY_INTERVAL"
+				AUTH_ACTIVE=0
+				auth_lock_release
 				interruptible_sleep "$CHECK_INTERVAL"
 				continue
 			fi
+			av_state_finish failed failed E_VERIFY_OFFLINE verify "$AUTH_HTTP_CODE" "$AUTH_ORIGIN"
 			log "认证返回成功但连通性仍不通"
+			AUTH_ACTIVE=0
+			auth_lock_release
 		else
 			_auth_rc=$?
 			if [ "$_auth_rc" = "3" ]; then
@@ -647,6 +722,7 @@ need_curl
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/autoverify.XXXXXX") || die "无法创建临时目录"
 STOP_REQUESTED=0
 AUTH_ACTIVE=0
+av_state_init
 
 cleanup() {
 	auth_lock_release
@@ -655,6 +731,9 @@ cleanup() {
 
 on_signal() {
 	STOP_REQUESTED=1
+	if [ "${AUTH_ACTIVE:-0}" = "1" ]; then
+		av_state_finish interrupted failed E_INTERRUPTED signal "$AUTH_HTTP_CODE" "$AUTH_ORIGIN"
+	fi
 	# 信号到达认证阶段时立即释放本进程持有的锁；退出 trap 会再次幂等清理。
 	auth_lock_release
 	if [ "${AUTH_ACTIVE:-0}" = "1" ]; then

@@ -24,6 +24,7 @@ export MAIN_PASSWORD="p@ss w0rd&x=1"   # 故意带空格和 & , 验证编码
 export TUNING_HTTP_TIMEOUT=5
 RUN_DIR=$(mktemp -d) || exit 1
 export AUTOVERIFY_RUN_DIR="$RUN_DIR"
+export AUTOVERIFY_STATE_DIR="$RUN_DIR/persist"
 
 # 脚本现在从 /usr/lib/autoverify/cfg.sh 读配置; 本地跑要指到仓库里的那份。
 # 没有 uci 命令时会自动退回同名环境变量 (上面那些就是 SECTION_OPTION 形式)。
@@ -117,6 +118,18 @@ check() {
 echo "=========== 1. 认证成功 ==========="
 start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
 check "probe 302 -> 抓登录页 -> 提交 -> 跟随 nextPage -> 204 复核" 0 "认证后连通性验证通过"
+if [ -f "$AUTOVERIFY_RUN_DIR/status" ] && \
+	grep -q '^result=success$' "$AUTOVERIFY_RUN_DIR/status" && \
+	grep -q '^state=online$' "$AUTOVERIFY_RUN_DIR/status"; then
+	echo "    [OK]   运行状态已记录认证结论"
+else
+	echo "    [FAIL] 运行状态缺失或结论错误"; FAILED=1
+fi
+if grep -qE 'p@ss|JSESSIONID|wlanuserip=' "$AUTOVERIFY_RUN_DIR/status" 2>/dev/null; then
+	echo "    [FAIL] 运行状态包含敏感认证数据"; FAILED=1
+else
+	echo "    [OK]   运行状态未泄露密码、Cookie 或完整认证字段"
+fi
 echo "    mock 收到的请求:"
 sed 's/^/      /' "$TMPOUT"
 
