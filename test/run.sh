@@ -67,6 +67,9 @@ stop_mock() {
 	[ -f "$RUN_DIR/mock.pid" ] && _mock_real_pid=$(cat "$RUN_DIR/mock.pid" 2>/dev/null)
 	_mock_windows=0
 	if [ -n "$MOCK_PID" ]; then
+		# 先让 mock 自己关闭 HTTPServer，避免 Windows 下杀包装进程后端口
+		# 仍短暂占用，导致下一用例误报端口残留。
+		curl -s -o /dev/null -m 1 "http://127.0.0.1:$PORT/__shutdown" 2>/dev/null || true
 		# Git Bash 下 $! 可能指向包装进程而不是 python 本身；taskkill /T
 		# 只用于结束本测试启动的进程树，Linux 仍走 POSIX kill。
 		if command -v taskkill >/dev/null 2>&1; then

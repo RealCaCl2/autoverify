@@ -21,6 +21,7 @@ import http.server
 import os
 import re
 import sys
+import threading
 import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18099
@@ -32,6 +33,7 @@ if PID_FILE:
         pid_out.write(str(os.getpid()))
 
 STATE = {"online": False, "gets": [], "posts": 0}
+SERVER = None
 
 # 字段名与真实门户一致; 值仅用于校验脚本是否正确回填, 无实际含义。
 # HYGXY / hyit.edu.cn 是抓包时的原始值(淮安大学 2026-02 改名前的旧缩写), 原样保留 ——
@@ -99,7 +101,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         STATE["gets"].append(self.path)
         print("GET %s" % self.path, flush=True)
-        if self.path.startswith("/probe"):
+        if self.path.startswith("/__shutdown"):
+            self._send(200, "shutting down")
+            threading.Thread(target=SERVER.shutdown, daemon=True).start()
+        elif self.path.startswith("/probe"):
             if STATE["online"]:
                 self._send(204)
                 return
@@ -161,4 +166,5 @@ class Handler(http.server.BaseHTTPRequestHandler):
 if __name__ == "__main__":
     http.server.HTTPServer.allow_reuse_address = True
     print("mock portal listening on 127.0.0.1:%d" % PORT, flush=True)
-    http.server.HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    SERVER = http.server.HTTPServer(("127.0.0.1", PORT), Handler)
+    SERVER.serve_forever()
