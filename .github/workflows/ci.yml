@@ -54,12 +54,47 @@ jobs:
       - name: LuCI 视图与 JSON 语法
         run: |
           node --check files/www/luci-static/resources/view/autoverify.js
+          python3 -c "
+          import ast
+          from pathlib import Path
+          ast.parse(Path('test/mock_portal.py').read_text(encoding='utf-8'))
+          print('Python syntax OK')
+          "
           node -e "
             for (const p of ['files/usr/share/luci/menu.d/luci-app-autoverify.json',
                              'files/usr/share/rpcd/acl.d/luci-app-autoverify.json'])
               JSON.parse(require('fs').readFileSync(p, 'utf8'));
             console.log('JSON OK');
           "
+
+      - name: 包内文件清单静态检查
+        run: |
+          set -eu
+          files='
+            files/usr/sbin/autoverify
+            files/usr/sbin/autoverify-apply
+            files/usr/sbin/autoverify-hardening
+            files/usr/lib/autoverify/cfg.sh
+            files/usr/lib/autoverify/lock.sh
+            files/usr/lib/autoverify/state.sh
+            files/usr/lib/autoverify/refresh-luci-cache.sh
+            files/etc/init.d/autoverify
+            files/etc/hotplug.d/iface/99-autoverify
+            files/etc/uci-defaults/90-autoverify-migrate
+            files/etc/config/autoverify
+            files/usr/share/luci/menu.d/luci-app-autoverify.json
+            files/usr/share/rpcd/acl.d/luci-app-autoverify.json
+            files/www/luci-static/resources/view/autoverify.js
+          '
+          for f in $files; do
+            test -f "$f"
+          done
+          for f in autoverify autoverify-apply autoverify-hardening; do
+            grep -F "./files/usr/sbin/$f" package/autoverify/Makefile
+          done
+          grep -F './files/usr/lib/autoverify/lock.sh' package/autoverify/Makefile
+          grep -F './files/usr/lib/autoverify/state.sh' package/autoverify/Makefile
+          grep -F 'define Package/autoverify/conffiles' package/autoverify/Makefile
 
       - name: 回归测试
         run: sh test/run.sh

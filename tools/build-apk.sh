@@ -84,4 +84,8 @@ done
 OUT="$REPO/dist"
 mkdir -p "$OUT"
 find bin \( -name 'autoverify*.apk' -o -name 'autoverify*.ipk' \) -exec cp {} "$OUT/" \;
+if ! find "$OUT" -maxdepth 1 -type f \( -name 'autoverify*.apk' -o -name 'autoverify*.ipk' \) | grep -q .; then
+	echo "!! 构建没有产出 autoverify APK/IPK" >&2
+	exit 1
+fi
 ls -la "$OUT"
