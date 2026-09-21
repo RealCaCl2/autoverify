@@ -20,9 +20,15 @@
 import http.server
 import os
 import sys
+import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 18099
 DEFAULT_RESP = '{"message":"","nextPage":"goToAuthResult","result":"success"}'
+PID_FILE = os.environ.get("MOCK_PID_FILE", "")
+
+if PID_FILE:
+    with open(PID_FILE, "w", encoding="ascii") as pid_out:
+        pid_out.write(str(os.getpid()))
 
 STATE = {"online": False, "gets": [], "posts": 0}
 
@@ -122,6 +128,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         print("  Content-Type: %s" % self.headers.get("Content-Type"), flush=True)
         for pair in body.split("&"):
             print("  %s" % pair, flush=True)
+        delay = os.environ.get("MOCK_POST_DELAY", "")
+        if delay:
+            time.sleep(float(delay))
         self._send(200, os.environ.get("MOCK_RESP", DEFAULT_RESP))
 
     def log_message(self, *args):

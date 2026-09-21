@@ -26,5 +26,5 @@ case " $HOTPLUG_IF " in
 	*) exit 0 ;;
 esac
 
-# 后台执行，不阻塞 hotplug
-/usr/sbin/autoverify once >/dev/null 2>&1 &
+# 后台执行，不阻塞 hotplug。来源只用于日志和锁诊断，不改变认证行为。
+AUTOVERIFY_SOURCE=hotplug /usr/sbin/autoverify once >/dev/null 2>&1 &

@@ -22,6 +22,8 @@ export PORTAL_PORT="$PORT"
 export MAIN_USERNAME="20230001"
 export MAIN_PASSWORD="p@ss w0rd&x=1"   # 故意带空格和 & , 验证编码
 export TUNING_HTTP_TIMEOUT=5
+RUN_DIR=$(mktemp -d) || exit 1
+export AUTOVERIFY_RUN_DIR="$RUN_DIR"
 
 # 脚本现在从 /usr/lib/autoverify/cfg.sh 读配置; 本地跑要指到仓库里的那份。
 # 没有 uci 命令时会自动退回同名环境变量 (上面那些就是 SECTION_OPTION 形式)。
@@ -39,7 +41,8 @@ start_mock() {
 		exit 1
 	fi
 
-	MOCK_RESP="$1" "$PY" "$ROOT/test/mock_portal.py" "$PORT" > "$TMPOUT" 2>&1 &
+	MOCK_RESP="$1" MOCK_POST_DELAY="${MOCK_POST_DELAY:-}" MOCK_PID_FILE="$RUN_DIR/mock.pid" \
+		"$PY" "$ROOT/test/mock_portal.py" "$PORT" > "$TMPOUT" 2>&1 &
 	MOCK_PID=$!
 
 	# 等启动完成: 既要有就绪日志, 也要端口真的能连上
@@ -58,9 +61,26 @@ start_mock() {
 }
 
 stop_mock() {
-	[ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null
-	wait "$MOCK_PID" 2>/dev/null
+	_mock_real_pid=""
+	[ -f "$RUN_DIR/mock.pid" ] && _mock_real_pid=$(cat "$RUN_DIR/mock.pid" 2>/dev/null)
+	_mock_windows=0
+	if [ -n "$MOCK_PID" ]; then
+		# Git Bash 下 $! 可能指向包装进程而不是 python 本身；taskkill /T
+		# 只用于结束本测试启动的进程树，Linux 仍走 POSIX kill。
+		if command -v taskkill >/dev/null 2>&1; then
+			_mock_windows=1
+			[ -n "$_mock_real_pid" ] || _mock_real_pid="$MOCK_PID"
+			taskkill //PID "$_mock_real_pid" //T //F >/dev/null 2>&1 || true
+		else
+			[ -n "$_mock_real_pid" ] || _mock_real_pid="$MOCK_PID"
+			kill "$_mock_real_pid" 2>/dev/null || true
+		fi
+	fi
+	# Windows 的后台包装 shell 可能不会因子进程被 taskkill 而结束，等待它会让
+	# 回归测试卡住；Linux 仍等待以回收子进程。
+	[ "$_mock_windows" = "1" ] || wait "$MOCK_PID" 2>/dev/null
 	MOCK_PID=""
+	rm -f "$RUN_DIR/mock.pid"
 	# 等端口真正释放, 否则下一次 start_mock 的占用检查会误报
 	_i=0
 	while [ "$_i" -lt 25 ]; do
@@ -72,7 +92,7 @@ stop_mock() {
 }
 
 TMPOUT=$(mktemp) || exit 1
-trap 'stop_mock; rm -f "$TMPOUT"' EXIT INT TERM
+trap 'stop_mock; rm -f "$TMPOUT"; rm -rf "$RUN_DIR"' EXIT INT TERM
 
 check() {
 	_name="$1"; _expect_rc="$2"; _expect_text="$3"
@@ -205,6 +225,50 @@ echo "--- 空 host 时, 与门户无关的跳转不能被当成门户"
 # 报的是“无法获取认证页面”而不是“未发现门户重定向”。
 MOCK_PROBE_MODE=other302 start_mock '{"message":"","result":"success"}'
 check "应报未发现门户重定向" 1 "未发现门户重定向"
+stop_mock
+
+echo "=========== 11. 并发认证互斥 =========="
+MOCK_POST_DELAY=2 start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
+OUT1=$(mktemp)
+OUT2=$(mktemp)
+sh "$SCRIPT" once >"$OUT1" 2>&1 &
+PID1=$!
+_i=0
+while [ "$_i" -lt 40 ] && ! grep -q '^POST /zportal/login/do' "$TMPOUT" 2>/dev/null; do
+	sleep 0.1
+	_i=$((_i + 1))
+done
+sh "$SCRIPT" once >"$OUT2" 2>&1
+RC2=$?
+wait "$PID1"
+RC1=$?
+POSTS=$(grep -c '^POST /zportal/login/do' "$TMPOUT" 2>/dev/null || true)
+printf '    first rc=%s second rc=%s POST 数=%s\n' "$RC1" "$RC2" "$POSTS"
+if [ "$RC2" = "3" ] && [ "$POSTS" = "1" ]; then
+	echo "    [OK] 并发调用只有一个提交, 第二个立即返回 busy"
+else
+	echo "    [FAIL] 并发互斥未生效"
+	cat "$OUT1" "$OUT2" | sed 's/^/      /'
+	FAILED=1
+fi
+rm -f "$OUT1" "$OUT2"
+stop_mock
+
+echo "=========== 12. stale lock 回收 =========="
+start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
+mkdir -p "$AUTOVERIFY_RUN_DIR/auth.lock.d"
+{
+	echo 'pid=999999'
+	echo 'started_at=1'
+	echo 'source=test'
+	echo 'operation=once'
+} > "$AUTOVERIFY_RUN_DIR/auth.lock.d/owner"
+check "无效 PID 的 stale lock 应被回收" 0 "认证后连通性验证通过"
+if [ -d "$AUTOVERIFY_RUN_DIR/auth.lock.d" ]; then
+	echo "    [FAIL] stale lock 未清理"; FAILED=1
+else
+	echo "    [OK] stale lock 已回收"
+fi
 stop_mock
 
 PORTAL_HOST="$HOST_SAVE"

@@ -31,6 +31,14 @@ if [ ! -r "$AV_LIB" ]; then
 fi
 . "$AV_LIB"
 
+AV_LOCK_LIB="${AV_LOCK_LIB:-${AV_LIB%/*}/lock.sh}"
+# shellcheck disable=SC1090
+if [ ! -r "$AV_LOCK_LIB" ]; then
+	printf 'autoverify: 找不到 %s\n' "$AV_LOCK_LIB" >&2
+	exit 1
+fi
+. "$AV_LOCK_LIB"
+
 # --------------------------------------------------------------- 读取配置 ---
 # 唯一事实来源是 UCI /etc/config/autoverify。
 # 无 uci 命令时(本地测试)自动退回同名环境变量, 再退回默认值。
@@ -47,7 +55,13 @@ CHECK_INTERVAL=$(av_cfg tuning check_interval "60")
 RETRY_INTERVAL=$(av_cfg tuning retry_interval "20")
 MAX_RETRY_INTERVAL=$(av_cfg tuning max_retry_interval "300")
 VERBOSE=$(av_cfg_bool tuning verbose "0")
+LOCK_ENABLED=$(av_cfg_bool tuning lock_enabled "1")
+LOCK_MAX_AGE=$(av_cfg tuning lock_max_age "300")
 WAN_IF=$(av_cfg network wan_if)
+
+# 仅供本地测试覆盖；设备上固定使用 /var/run/autoverify。
+LOCK_ROOT="${AUTOVERIFY_RUN_DIR:-/var/run/autoverify}"
+AUTOVERIFY_SOURCE="${AUTOVERIFY_SOURCE:-manual}"
 
 # 请求 User-Agent。
 #
@@ -410,6 +424,34 @@ do_login() {
 	return 1
 }
 
+# 所有可能提交认证请求的入口都经过这里。获取锁不排队：busy 立即返回 3，
+# 这样 hotplug 风暴不会在后台堆积多个等待进程。
+run_auth_locked() {
+	_operation=${1:-once}
+	if [ "$LOCK_ENABLED" = "1" ]; then
+		auth_lock_acquire "$AUTOVERIFY_SOURCE" "$_operation"
+		_lock_rc=$?
+		case "$_lock_rc" in
+			0) ;;
+			3)
+				log "已有认证任务运行 (source=$AUTOVERIFY_SOURCE operation=$_operation)"
+				return 3
+				;;
+			*)
+				log "无法创建认证锁 (source=$AUTOVERIFY_SOURCE)"
+				return 1
+				;;
+		esac
+	fi
+
+	AUTH_ACTIVE=1
+	do_login
+	_auth_rc=$?
+	AUTH_ACTIVE=0
+	auth_lock_release
+	return "$_auth_rc"
+}
+
 # 跟随门户返回的 nextPage, 与浏览器 location.href = data.nextPage 一致。
 # nextPage 是相对当前页(/zportal/loginForWeb)的路径, 因此拼到 /zportal/ 下。
 follow_next_page() {
@@ -431,7 +473,7 @@ run_once() {
 		return 0
 	fi
 	log "检测到未认证, 开始认证"
-	if do_login; then
+	if run_auth_locked once; then
 		sleep 2
 		if check_online; then
 			log "认证后连通性验证通过"
@@ -440,6 +482,8 @@ run_once() {
 		fi
 		return 0
 	fi
+	_auth_rc=$?
+	[ "$_auth_rc" = "3" ] && return 3
 	return 1
 }
 
@@ -457,7 +501,7 @@ run_daemon() {
 		# 退避以“认证后是否真的通了”为准, 而不是以门户的回包为准。
 		# 实测门户会在会话没真正建立时也回 result=success, 若以此重置退避,
 		# 就会变成每 RETRY_INTERVAL 秒打一次门户。
-		if do_login; then
+		if run_auth_locked daemon; then
 			sleep 2
 			if check_online; then
 				log "认证后连通性验证通过"
@@ -466,6 +510,13 @@ run_daemon() {
 				continue
 			fi
 			log "认证返回成功但连通性仍不通"
+		else
+			_auth_rc=$?
+			if [ "$_auth_rc" = "3" ]; then
+				logv "认证任务忙, 本轮跳过"
+				interruptible_sleep "$RETRY_INTERVAL"
+				continue
+			fi
 		fi
 
 		_delay=$((_delay * 2))
@@ -594,8 +645,25 @@ need_curl
 [ -n "$PROBE_URLS" ] || die "PROBE_URLS 为空, 无法判断连通性"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/autoverify.XXXXXX") || die "无法创建临时目录"
 STOP_REQUESTED=0
-trap 'STOP_REQUESTED=1' INT TERM
-trap 'rm -rf "$TMP"' EXIT
+AUTH_ACTIVE=0
+
+cleanup() {
+	auth_lock_release
+	rm -rf "$TMP"
+}
+
+on_signal() {
+	STOP_REQUESTED=1
+	# 信号到达认证阶段时立即释放本进程持有的锁；退出 trap 会再次幂等清理。
+	auth_lock_release
+	if [ "${AUTH_ACTIVE:-0}" = "1" ]; then
+		exit 1
+	fi
+	exit 0
+}
+
+trap 'on_signal' INT TERM
+trap 'cleanup' EXIT
 
 # -v/--verbose: 临时打开详细日志。
 # 必须放在这里: 配置文件会覆盖同名环境变量, 所以 `VERBOSE=1 autoverify once` 在
@@ -606,7 +674,7 @@ esac
 
 case "${1:-once}" in
 	check)  check_online ;;
-	login)  do_login ;;
+	login)  run_auth_locked login ;;
 	once)   run_once ;;
 	daemon) run_daemon ;;
 	debug)  run_debug ;;
