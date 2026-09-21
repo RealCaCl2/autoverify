@@ -228,6 +228,20 @@ if [ "$_audit_rc" = "0" ] && printf '%s\n' "$_audit_json" | "$PY" -c 'import jso
 else
 	echo "    [FAIL] audit --json 无法严格解析或泄露敏感信息"; FAILED=1
 fi
+mkdir -p "$AUTOVERIFY_RUN_DIR/auth.lock.d"
+{
+	echo 'pid=999999'
+	echo 'started_at=1'
+	echo 'source=test'
+	echo 'operation=once'
+} > "$AUTOVERIFY_RUN_DIR/auth.lock.d/owner"
+_stale_json=$(sh "$SCRIPT" status --json 2>&1)
+if printf '%s\n' "$_stale_json" | "$PY" -c 'import json, sys; assert json.load(sys.stdin)["lock_state"] == "stale"'; then
+	echo "    [OK]   status 能识别 stale lock"
+else
+	echo "    [FAIL] status 未识别 stale lock"; FAILED=1
+fi
+rm -rf "$AUTOVERIFY_RUN_DIR/auth.lock.d"
 echo "    mock 收到的请求:"
 sed 's/^/      /' "$TMPOUT"
 

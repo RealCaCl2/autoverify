@@ -916,7 +916,7 @@ load_status_snapshot() {
 	if [ -r "$AUTH_LOCK_DIR/owner" ]; then
 		STATUS_LOCK_PID=$(av_state_get "$AUTH_LOCK_DIR/owner" pid)
 		STATUS_LOCK_SOURCE=$(av_state_get "$AUTH_LOCK_DIR/owner" source)
-		STATUS_LOCK_STATE=busy
+		if auth_lock_is_stale; then STATUS_LOCK_STATE=stale; else STATUS_LOCK_STATE=busy; fi
 	else
 		STATUS_LOCK_PID=""
 		STATUS_LOCK_SOURCE=""
@@ -1014,15 +1014,32 @@ run_status() {
 audit_values() {
 	AUDIT_IF=$(default_if)
 	AUDIT_IP=""
+	AUDIT_DEFAULT_ROUTE=unknown
+	AUDIT_LAN_DEV=$(av_cfg network lan_dev "br-lan")
+	AUDIT_LAN_PRESENT=unknown
 	AUDIT_IPV6_GLOBAL=unknown
 	AUDIT_IPV6_DEFAULT=unknown
-	AUDIT_DNS_LISTEN=unknown
+	AUDIT_TTL_LOADED=unknown
+	AUDIT_DNS_RULE_UDP=unknown
+	AUDIT_DNS_RULE_TCP=unknown
+	AUDIT_NTP_RULE=unknown
+	AUDIT_DNS_UDP_LISTEN=unknown
+	AUDIT_DNS_TCP_LISTEN=unknown
 	AUDIT_NTP_LISTEN=unknown
+	AUDIT_RA=unknown
+	AUDIT_DHCPV6=unknown
 	AUDIT_FLOWTABLE=unknown
 	AUDIT_TTL_FILE=absent
 	[ -e /etc/nftables.d/20-ttl-normalize.nft ] && AUDIT_TTL_FILE=present
 	if command -v ip >/dev/null 2>&1; then
+		AUDIT_DEFAULT_ROUTE=$(ip route show default 2>/dev/null | head -n 1)
+		[ -n "$AUDIT_DEFAULT_ROUTE" ] || AUDIT_DEFAULT_ROUTE=unknown
 		[ -n "$AUDIT_IF" ] && AUDIT_IP=$(if_ip4 "$AUDIT_IF")
+		if [ -n "$AUDIT_LAN_DEV" ] && ip link show "$AUDIT_LAN_DEV" >/dev/null 2>&1; then
+			AUDIT_LAN_PRESENT=yes
+		else
+			AUDIT_LAN_PRESENT=no
+		fi
 		if ip -6 addr show scope global 2>/dev/null | grep -q 'inet6 '; then
 			AUDIT_IPV6_GLOBAL=yes
 		else
@@ -1035,24 +1052,44 @@ audit_values() {
 		fi
 	fi
 	if command -v netstat >/dev/null 2>&1; then
-		AUDIT_DNS_LISTEN=$(netstat -lnu 2>/dev/null | grep -cE ':53[[:space:]]' || true)
+		AUDIT_DNS_UDP_LISTEN=$(netstat -lnu 2>/dev/null | grep -cE ':53[[:space:]]' || true)
+		AUDIT_DNS_TCP_LISTEN=$(netstat -lnt 2>/dev/null | grep -cE ':53[[:space:]]' || true)
 		AUDIT_NTP_LISTEN=$(netstat -lnu 2>/dev/null | grep -cE ':123[[:space:]]' || true)
 	fi
 	if command -v nft >/dev/null 2>&1; then
-		if nft list ruleset 2>/dev/null | grep -q flowtable; then AUDIT_FLOWTABLE=yes; else AUDIT_FLOWTABLE=no; fi
+		_nft_rules=$(nft list ruleset 2>/dev/null)
+		_nft_rc=$?
+		if [ "$_nft_rc" -eq 0 ]; then
+			case "$_nft_rules" in *ttl_normalize*) AUDIT_TTL_LOADED=yes ;; *) AUDIT_TTL_LOADED=no ;; esac
+			case "$_nft_rules" in *dns-converge-udp*) AUDIT_DNS_RULE_UDP=yes ;; *) AUDIT_DNS_RULE_UDP=no ;; esac
+			case "$_nft_rules" in *dns-converge-tcp*) AUDIT_DNS_RULE_TCP=yes ;; *) AUDIT_DNS_RULE_TCP=no ;; esac
+			case "$_nft_rules" in *ntp-converge*) AUDIT_NTP_RULE=yes ;; *) AUDIT_NTP_RULE=no ;; esac
+			case "$_nft_rules" in *flowtable*) AUDIT_FLOWTABLE=yes ;; *) AUDIT_FLOWTABLE=no ;; esac
+		fi
+	fi
+	if command -v uci >/dev/null 2>&1; then
+		AUDIT_RA=$(uci -q get dhcp.lan.ra 2>/dev/null) || AUDIT_RA=unknown
+		AUDIT_DHCPV6=$(uci -q get dhcp.lan.dhcpv6 2>/dev/null) || AUDIT_DHCPV6=unknown
+		[ -n "$AUDIT_RA" ] || AUDIT_RA=unknown
+		[ -n "$AUDIT_DHCPV6" ] || AUDIT_DHCPV6=unknown
 	fi
 }
 
 audit_json() {
 	load_status_snapshot
 	audit_values
-	printf '{"version":1,"state":%s,"result":%s,"daemon_count":%s,"lock_state":%s,"checks":[{"name":"wan_interface","value":%s},{"name":"wan_ipv4","value":%s},{"name":"ipv6_global","value":%s},{"name":"ipv6_default_route","value":%s},{"name":"ttl_rule_file","value":%s},{"name":"flowtable","value":%s},{"name":"dns_udp53_listeners","value":%s},{"name":"ntp_udp123_listeners","value":%s}],"coverage":["DoH 不受 DNS redirect 覆盖","HTTPS/TLS 与 QUIC 指纹不由本项目处理","flow offloading 可能使 TTL 覆盖不完整"]}\n' \
+	printf '{"version":1,"state":%s,"result":%s,"daemon_count":%s,"lock_state":%s,"checks":[{"name":"wan_interface","value":%s},{"name":"wan_ipv4","value":%s},{"name":"default_route","value":%s},{"name":"lan_device","value":%s},{"name":"lan_device_present","value":%s},{"name":"ipv6_global","value":%s},{"name":"ipv6_default_route","value":%s},{"name":"ttl_rule_file","value":%s},{"name":"ttl_rule_loaded","value":%s},{"name":"dns_redirect_udp","value":%s},{"name":"dns_redirect_tcp","value":%s},{"name":"ntp_redirect","value":%s},{"name":"flowtable","value":%s},{"name":"dns_udp53_listeners","value":%s},{"name":"dns_tcp53_listeners","value":%s},{"name":"ntp_udp123_listeners","value":%s},{"name":"lan_ra","value":%s},{"name":"lan_dhcpv6","value":%s}],"coverage":["DoH 不受 DNS redirect 覆盖","HTTPS/TLS 与 QUIC 指纹不由本项目处理","并发连接和流量行为不由本项目处理","flow offloading 可能使 TTL 覆盖不完整"]}\n' \
 		"$(json_string "$STATUS_STATE")" "$(json_string "$STATUS_RESULT")" \
 		"$(json_number "$STATUS_DAEMON_COUNT")" "$(json_string "$STATUS_LOCK_STATE")" \
 		"$(json_string "$AUDIT_IF")" "$(json_string "$AUDIT_IP")" \
-		"$(json_string "$AUDIT_IPV6_GLOBAL")" "$(json_string "$AUDIT_IPV6_DEFAULT")" \
-		"$(json_string "$AUDIT_TTL_FILE")" "$(json_string "$AUDIT_FLOWTABLE")" \
-		"$(json_number "$AUDIT_DNS_LISTEN")" "$(json_number "$AUDIT_NTP_LISTEN")"
+		"$(json_string "$AUDIT_DEFAULT_ROUTE")" "$(json_string "$AUDIT_LAN_DEV")" \
+		"$(json_string "$AUDIT_LAN_PRESENT")" "$(json_string "$AUDIT_IPV6_GLOBAL")" \
+		"$(json_string "$AUDIT_IPV6_DEFAULT")" "$(json_string "$AUDIT_TTL_FILE")" \
+		"$(json_string "$AUDIT_TTL_LOADED")" "$(json_string "$AUDIT_DNS_RULE_UDP")" \
+		"$(json_string "$AUDIT_DNS_RULE_TCP")" "$(json_string "$AUDIT_NTP_RULE")" \
+		"$(json_string "$AUDIT_FLOWTABLE")" "$(json_number "$AUDIT_DNS_UDP_LISTEN")" \
+		"$(json_number "$AUDIT_DNS_TCP_LISTEN")" "$(json_number "$AUDIT_NTP_LISTEN")" \
+		"$(json_string "$AUDIT_RA")" "$(json_string "$AUDIT_DHCPV6")"
 }
 
 run_audit() {
@@ -1067,13 +1104,20 @@ run_audit() {
 	echo "== 网络路径 =="
 	echo "  WAN 接口      : ${AUDIT_IF:-unknown}"
 	echo "  WAN IPv4      : ${AUDIT_IP:-unknown}"
+	echo "  默认路由      : ${AUDIT_DEFAULT_ROUTE:-unknown}"
+	echo "  LAN 接口      : ${AUDIT_LAN_DEV:-unknown} (${AUDIT_LAN_PRESENT:-unknown})"
 	echo "  IPv6 全局地址 : $AUDIT_IPV6_GLOBAL"
 	echo "  IPv6 默认路由 : $AUDIT_IPV6_DEFAULT"
 	echo "== 防火墙与服务 =="
 	echo "  TTL 规则文件  : $AUDIT_TTL_FILE"
+	echo "  TTL 已加载    : $AUDIT_TTL_LOADED"
+	echo "  DNS redirect  : UDP=$AUDIT_DNS_RULE_UDP TCP=$AUDIT_DNS_RULE_TCP"
+	echo "  NTP redirect  : $AUDIT_NTP_RULE"
 	echo "  flowtable     : $AUDIT_FLOWTABLE"
-	echo "  DNS UDP/53    : $AUDIT_DNS_LISTEN"
+	echo "  DNS UDP/53    : $AUDIT_DNS_UDP_LISTEN"
+	echo "  DNS TCP/53    : $AUDIT_DNS_TCP_LISTEN"
 	echo "  NTP UDP/123   : $AUDIT_NTP_LISTEN"
+	echo "  LAN RA/DHCPv6 : $AUDIT_RA / $AUDIT_DHCPV6"
 	echo "== 覆盖范围说明 =="
 	echo "  DoH 不受 DNS redirect 覆盖"
 	echo "  HTTPS/TLS 与 QUIC 指纹不由本项目处理"
