@@ -11,7 +11,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=autoverify
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=13
+PKG_RELEASE:=14
 
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=CaCl2 <RealCaCl2@users.noreply.github.com>
@@ -36,6 +36,8 @@ define Package/autoverify/description
     - TTL 归一化
     - NTP 收敛
     - DNS 收敛
+    - DHCP 伪装(主机名 / client-id / 厂商号 / DHCPv6 FQDN)
+    - IPv6 防护(关掉 LAN 的 RA 与 DHCPv6, 防绕过 NAT)
 
   提供 LuCI 设置页面 (服务 -> 校园网自动认证)。
 endef
