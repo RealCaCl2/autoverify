@@ -171,6 +171,12 @@ logread -f -e autoverify     # Ctrl-C 退出
 /usr/sbin/autoverify debug              # 只读: 打印配置/连通性/待提交字段，不提交认证
 /usr/sbin/autoverify validate           # 只读: 校验配置与本机依赖，不发起认证
 /usr/sbin/autoverify check; echo $?     # 0=在线 1=离线
+/usr/sbin/autoverify check --json       # 输出固定字段的机器可读连通性结果
+/usr/sbin/autoverify status             # 只读: 查看服务、认证和网络状态
+/usr/sbin/autoverify status --json      # 输出固定字段的机器可读状态
+/usr/sbin/autoverify status --probe     # 显式执行一次连通性探测后输出状态
+/usr/sbin/autoverify audit              # 只读: 审计网络路径、防火墙和覆盖范围
+/usr/sbin/autoverify audit --json       # 输出固定字段的机器可读审计结果
 /usr/sbin/autoverify once               # 检测后按需认证一次
 /usr/sbin/autoverify -v once            # 输出详细日志
 /usr/sbin/autoverify update-check       # 0=已是最新 1=有新版本 2=查询失败
@@ -256,6 +262,10 @@ www/luci-static/resources/view/autoverify.js      视图
 usr/share/luci/menu.d/luci-app-autoverify.json   菜单
 usr/share/rpcd/acl.d/luci-app-autoverify.json    权限(uci 读写 + 三条命令的 exec)
 ```
+
+status 默认不发起网络探测；只有显式传入 --probe 才会探测一次。status 和 audit 均为只读，
+缺少 ip、nft 或可选服务时会以 unknown 或部分结果继续输出。--json 输出固定字段，
+适合 LuCI 和外部监控读取；其中认证状态只保存脱敏 origin，不保存密码、Cookie 或完整认证字段。
 
 ## 运行机制
 

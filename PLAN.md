@@ -10,8 +10,8 @@
 本文件既是设计记录，也是本轮变更的验收清单。实施以“可回滚、可独立验证、一个阶段一个
 提交”为硬约束；没有真实 OpenWrt 设备时，不把设备验收标记为完成。
 
-当前基线：`main` 的 `v1.0.5`，现有代码尚无统一认证锁、运行状态、`validate`、`status`
-或 `audit` 命令；认证参数仍通过 curl 参数传递；`nextPage` 请求失败也可能继续返回成功。
+当前基线：`main` 的 `v1.0.5`，本轮已先完成认证锁、运行状态、`validate` 和 `nextPage` 严格校验，
+并在本阶段补充 `status`、`audit` 与机器可读输出；设备验收仍未完成。
 现有 mock 回归测试是行为基线，任何阶段都必须保持通过。
 
 执行顺序和状态：
@@ -23,7 +23,7 @@
 | 2 | 统一运行状态和稳定错误码 | 已实现；CI/设备待验证 |
 | 3 | `validate` 配置/环境检查 | 已实现；CI/设备待验证 |
 | 4 | 安全的 `nextPage` 校验与失败传播 | 已实现；CI/设备待验证 |
-| 5 | `status`、`audit` 和只读 JSON 输出 | 待执行 |
+| 5 | `status`、`audit` 和只读 JSON 输出 | 已实现；CI/设备待验证 |
 | 6 | LuCI 状态/诊断入口、最小权限 ACL | 待执行 |
 | 7 | 门户解析异常覆盖、文档、CI/打包检查 | 待执行 |
 
@@ -501,9 +501,10 @@ autoverify audit
 
 ## 8.3 输出格式
 
-第一阶段支持人类可读文本；后续可增加：
+当前同时支持人类可读文本和固定字段 JSON：
 
 ```sh
+autoverify check --json
 autoverify status --json
 autoverify audit --json
 ```
@@ -1266,11 +1267,11 @@ trap 'release_auth_lock' EXIT INT TERM
 - [ ] hotplug 与 daemon 并发时只有一个认证请求；
 - [ ] stale lock（假 PID / 真 PID 非本程序 / 超时）能被回收；
 - [ ] SIGTERM 中断后锁不残留；
-- [ ] `status` 输出当前阶段、最近结果、错误码、重试时间；
+- [x] `status` 输出当前阶段、最近结果、错误码、重试时间；
 - [ ] `validate` 对非法端口 / TTL / 超时 / 空账号报错并返回 1；
-- [ ] `audit` 在缺少 `nft` 时仍能输出其余部分；
+- [x] `audit` 在缺少 `nft` 时仍能输出其余部分；
 - [ ] nextPage 指向外部 origin 时被拒且不发起请求；
-- [ ] `--json` 输出可被严格解析。
+- [x] `--json` 输出可被严格解析。
 
 ## 29.2 安全
 

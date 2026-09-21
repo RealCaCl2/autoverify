@@ -143,3 +143,10 @@ av_state_set_retry() {
 	AV_STATE_NEXT_RETRY_AT=${1:-0}
 	av_state_commit
 }
+
+av_state_get() {
+	_file=$1
+	_key=$2
+	[ -r "$_file" ] || return 0
+	sed -n "s/^${_key}=//p" "$_file" 2>/dev/null | head -n 1
+}

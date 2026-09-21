@@ -9,6 +9,9 @@
 #   once    检测后按需认证一次
 #   daemon  常驻循环, 由 /etc/init.d/autoverify 启动
 #   debug   打印探测与解析结果, 不提交认证
+#   validate 只读校验配置与本机依赖
+#   status  查看运行状态 (可选 --json/--probe)
+#   audit   只读审计网络与防火墙实际状态 (可选 --json)
 #   update-check  查 GitHub Releases, 与本机安装版本比较(只读)
 #
 # 配置: UCI /etc/config/autoverify (读取顺序见 usr/lib/autoverify/cfg.sh)
@@ -811,6 +814,218 @@ run_validate() {
 	return 0
 }
 
+# ---------------------------------------------------------- 状态与审计命令 ---
+
+json_escape() {
+	printf '%s' "${1:-}" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+json_string() {
+	if [ -n "${1:-}" ]; then
+		printf '"%s"' "$(json_escape "$1")"
+	else
+		printf 'null'
+	fi
+}
+
+json_number() {
+	case "${1:-}" in
+		''|*[!0-9]*) printf 'null' ;;
+		*) printf '%s' "$1" ;;
+	esac
+}
+
+load_status_snapshot() {
+	STATUS_FILE="$AV_STATE_FILE"
+	[ -r "$STATUS_FILE" ] || STATUS_FILE="$AV_STATE_LAST_FILE"
+	STATUS_STATE=$(av_state_get "$STATUS_FILE" state)
+	STATUS_SOURCE=$(av_state_get "$STATUS_FILE" source)
+	STATUS_OPERATION=$(av_state_get "$STATUS_FILE" operation)
+	STATUS_STARTED_AT=$(av_state_get "$STATUS_FILE" started_at)
+	STATUS_FINISHED_AT=$(av_state_get "$STATUS_FILE" finished_at)
+	STATUS_DURATION_MS=$(av_state_get "$STATUS_FILE" duration_ms)
+	STATUS_RESULT=$(av_state_get "$STATUS_FILE" result)
+	STATUS_ERROR_CODE=$(av_state_get "$STATUS_FILE" error_code)
+	STATUS_ERROR_STAGE=$(av_state_get "$STATUS_FILE" error_stage)
+	STATUS_HTTP_CODE=$(av_state_get "$STATUS_FILE" http_code)
+	STATUS_ORIGIN=$(av_state_get "$STATUS_FILE" portal_origin)
+	STATUS_NEXT_RETRY_AT=$(av_state_get "$STATUS_FILE" next_retry_at)
+	STATUS_LOCK_PID=$(av_state_get "$STATUS_FILE" lock_pid)
+	[ -n "$STATUS_STATE" ] || STATUS_STATE=unknown
+	[ -n "$STATUS_RESULT" ] || STATUS_RESULT=unknown
+	_daemon_pids=$(pidof autoverify 2>/dev/null || true)
+	STATUS_DAEMON_PID=$(printf '%s\n' "$_daemon_pids" | awk '{print $1}')
+	STATUS_DAEMON_COUNT=$(printf '%s\n' "$_daemon_pids" | awk '{print NF}')
+	[ -n "$STATUS_DAEMON_COUNT" ] || STATUS_DAEMON_COUNT=0
+	AUTH_LOCK_DIR="$LOCK_ROOT/auth.lock.d"
+	if [ -r "$AUTH_LOCK_DIR/owner" ]; then
+		STATUS_LOCK_PID=$(av_state_get "$AUTH_LOCK_DIR/owner" pid)
+		STATUS_LOCK_SOURCE=$(av_state_get "$AUTH_LOCK_DIR/owner" source)
+		STATUS_LOCK_STATE=busy
+	else
+		STATUS_LOCK_PID=""
+		STATUS_LOCK_SOURCE=""
+		STATUS_LOCK_STATE=free
+	fi
+}
+
+status_json() {
+	printf '{"version":1,"state":%s,"source":%s,"operation":%s,"started_at":%s,"finished_at":%s,"duration_ms":%s,"result":%s,"error_code":%s,"error_stage":%s,"http_code":%s,"portal_origin":%s,"lock_pid":%s,"next_retry_at":%s,"service_enabled":%s,"daemon_pid":%s,"daemon_count":%s,"lock_state":%s,"lock_source":%s,"wan_interface":%s,"wan_ipv4":%s,"ipv6_global":%s,"ipv6_default_route":%s,"probe":%s}\n' \
+		"$(json_string "$STATUS_STATE")" "$(json_string "$STATUS_SOURCE")" \
+		"$(json_string "$STATUS_OPERATION")" "$(json_number "$STATUS_STARTED_AT")" \
+		"$(json_number "$STATUS_FINISHED_AT")" "$(json_number "$STATUS_DURATION_MS")" \
+		"$(json_string "$STATUS_RESULT")" "$(json_string "$STATUS_ERROR_CODE")" \
+		"$(json_string "$STATUS_ERROR_STAGE")" "$(json_number "$STATUS_HTTP_CODE")" \
+		"$(json_string "$STATUS_ORIGIN")" "$(json_number "$STATUS_LOCK_PID")" \
+		"$(json_number "$STATUS_NEXT_RETRY_AT")" "$(json_number "$(av_cfg_bool main enabled "1")")" \
+		"$(json_number "$STATUS_DAEMON_PID")" "$(json_number "$STATUS_DAEMON_COUNT")" \
+		"$(json_string "$STATUS_LOCK_STATE")" "$(json_string "$STATUS_LOCK_SOURCE")" \
+		"$(json_string "$AUDIT_IF")" "$(json_string "$AUDIT_IP")" \
+		"$(json_string "$AUDIT_IPV6_GLOBAL")" "$(json_string "$AUDIT_IPV6_DEFAULT")" \
+		"$(json_string "$STATUS_PROBE")"
+}
+
+status_human() {
+	echo "== 服务 =="
+	if [ "$(av_cfg_bool main enabled "1")" = "1" ]; then
+		echo "  enabled       : 是"
+	else
+		echo "  enabled       : 否"
+	fi
+	echo "  daemon PID    : ${STATUS_DAEMON_PID:-<未运行>}"
+	echo "  daemon 数量   : $STATUS_DAEMON_COUNT"
+	echo "== 认证状态 =="
+	echo "  当前阶段      : $STATUS_STATE"
+	echo "  触发来源      : ${STATUS_SOURCE:-<未知>}"
+	echo "  最近结果      : $STATUS_RESULT"
+	echo "  最近耗时      : ${STATUS_DURATION_MS:-0} ms"
+	echo "  错误码/阶段   : ${STATUS_ERROR_CODE:-<无>} / ${STATUS_ERROR_STAGE:-<无>}"
+	echo "  下次重试      : ${STATUS_NEXT_RETRY_AT:-<无>}"
+	echo "  认证锁        : $STATUS_LOCK_STATE${STATUS_LOCK_PID:+ (PID $STATUS_LOCK_PID)}"
+	echo "== 网络 =="
+	echo "  WAN 接口      : ${AUDIT_IF:-unknown}"
+	echo "  WAN IPv4      : ${AUDIT_IP:-unknown}"
+	echo "  IPv6 全局地址 : ${AUDIT_IPV6_GLOBAL:-unknown}"
+	echo "  IPv6 默认路由 : ${AUDIT_IPV6_DEFAULT:-unknown}"
+	echo "== 门户摘要 =="
+	echo "  HTTP 状态码   : ${STATUS_HTTP_CODE:-<无>}"
+	echo "  Portal origin : ${STATUS_ORIGIN:-<无>}"
+}
+
+run_check() {
+	_check_json=0
+	[ "${1:-}" = "--json" ] && _check_json=1
+	if check_online; then
+		_check_online=1
+		_check_rc=0
+	else
+		_check_online=0
+		_check_rc=1
+	fi
+	if [ "$_check_json" = "1" ]; then
+		printf '{"version":1,"online":%s,"http_code":%s}\n' \
+			"$_check_online" "$(json_number "${PROBE_CODE:-}")"
+	fi
+	return "$_check_rc"
+}
+
+run_status() {
+	_status_probe=0
+	_status_json=0
+	for _arg in "$@"; do
+		case "$_arg" in
+			--probe) _status_probe=1 ;;
+			--json) _status_json=1 ;;
+			'') ;;
+			*) printf 'status: 不支持的选项: %s\n' "$_arg" >&2; return 2 ;;
+		esac
+	done
+	if [ "$_status_probe" = "1" ]; then
+		if check_online; then STATUS_PROBE=online; else STATUS_PROBE=offline; fi
+	else
+		STATUS_PROBE=not_run
+	fi
+	load_status_snapshot
+	audit_values
+	if [ "$_status_json" = "1" ]; then
+		status_json
+	else
+		status_human
+		echo "  本次探测      : $STATUS_PROBE"
+	fi
+	return 0
+}
+
+audit_values() {
+	AUDIT_IF=$(default_if)
+	AUDIT_IP=""
+	AUDIT_IPV6_GLOBAL=unknown
+	AUDIT_IPV6_DEFAULT=unknown
+	AUDIT_DNS_LISTEN=unknown
+	AUDIT_NTP_LISTEN=unknown
+	AUDIT_FLOWTABLE=unknown
+	AUDIT_TTL_FILE=absent
+	[ -e /etc/nftables.d/20-ttl-normalize.nft ] && AUDIT_TTL_FILE=present
+	if command -v ip >/dev/null 2>&1; then
+		[ -n "$AUDIT_IF" ] && AUDIT_IP=$(if_ip4 "$AUDIT_IF")
+		if ip -6 addr show scope global 2>/dev/null | grep -q 'inet6 '; then
+			AUDIT_IPV6_GLOBAL=yes
+		else
+			AUDIT_IPV6_GLOBAL=no
+		fi
+		if ip -6 route show default 2>/dev/null | grep -q .; then
+			AUDIT_IPV6_DEFAULT=yes
+		else
+			AUDIT_IPV6_DEFAULT=no
+		fi
+	fi
+	if command -v netstat >/dev/null 2>&1; then
+		AUDIT_DNS_LISTEN=$(netstat -lnu 2>/dev/null | grep -cE ':53[[:space:]]' || true)
+		AUDIT_NTP_LISTEN=$(netstat -lnu 2>/dev/null | grep -cE ':123[[:space:]]' || true)
+	fi
+	if command -v nft >/dev/null 2>&1; then
+		if nft list ruleset 2>/dev/null | grep -q flowtable; then AUDIT_FLOWTABLE=yes; else AUDIT_FLOWTABLE=no; fi
+	fi
+}
+
+audit_json() {
+	load_status_snapshot
+	audit_values
+	printf '{"version":1,"state":%s,"result":%s,"daemon_count":%s,"lock_state":%s,"checks":[{"name":"wan_interface","value":%s},{"name":"wan_ipv4","value":%s},{"name":"ipv6_global","value":%s},{"name":"ipv6_default_route","value":%s},{"name":"ttl_rule_file","value":%s},{"name":"flowtable","value":%s},{"name":"dns_udp53_listeners","value":%s},{"name":"ntp_udp123_listeners","value":%s}],"coverage":["DoH 不受 DNS redirect 覆盖","HTTPS/TLS 与 QUIC 指纹不由本项目处理","flow offloading 可能使 TTL 覆盖不完整"]}\n' \
+		"$(json_string "$STATUS_STATE")" "$(json_string "$STATUS_RESULT")" \
+		"$(json_number "$STATUS_DAEMON_COUNT")" "$(json_string "$STATUS_LOCK_STATE")" \
+		"$(json_string "$AUDIT_IF")" "$(json_string "$AUDIT_IP")" \
+		"$(json_string "$AUDIT_IPV6_GLOBAL")" "$(json_string "$AUDIT_IPV6_DEFAULT")" \
+		"$(json_string "$AUDIT_TTL_FILE")" "$(json_string "$AUDIT_FLOWTABLE")" \
+		"$(json_number "$AUDIT_DNS_LISTEN")" "$(json_number "$AUDIT_NTP_LISTEN")"
+}
+
+run_audit() {
+	case "${1:-}" in
+		--json) audit_json; return 0 ;;
+		'') ;;
+		*) printf 'audit: 不支持的选项: %s\n' "$1" >&2; return 2 ;;
+	esac
+	load_status_snapshot
+	audit_values
+	status_human
+	echo "== 网络路径 =="
+	echo "  WAN 接口      : ${AUDIT_IF:-unknown}"
+	echo "  WAN IPv4      : ${AUDIT_IP:-unknown}"
+	echo "  IPv6 全局地址 : $AUDIT_IPV6_GLOBAL"
+	echo "  IPv6 默认路由 : $AUDIT_IPV6_DEFAULT"
+	echo "== 防火墙与服务 =="
+	echo "  TTL 规则文件  : $AUDIT_TTL_FILE"
+	echo "  flowtable     : $AUDIT_FLOWTABLE"
+	echo "  DNS UDP/53    : $AUDIT_DNS_LISTEN"
+	echo "  NTP UDP/123   : $AUDIT_NTP_LISTEN"
+	echo "== 覆盖范围说明 =="
+	echo "  DoH 不受 DNS redirect 覆盖"
+	echo "  HTTPS/TLS 与 QUIC 指纹不由本项目处理"
+	echo "  flow offloading 可能使 TTL 规则覆盖不完整"
+	return 0
+}
+
 # ----------------------------------------------------------------- 工具 ----
 
 # 从 JSON 文本里取一个字符串字段。输出是压缩成一行的, 所以不能简单地贪心匹配。
@@ -939,15 +1154,17 @@ case "${1:-}" in
 esac
 
 case "${1:-once}" in
-	check)  check_online ;;
+	check)  shift; run_check "$@" ;;
 	login)  run_auth_locked login ;;
 	once)   run_once ;;
 	daemon) run_daemon ;;
 	debug)  run_debug ;;
 	validate) run_validate ;;
+	status) shift; run_status "$@" ;;
+	audit) shift; run_audit "$@" ;;
 	update-check) cmd_update_check ;;
 	*)
-		printf '用法: %s [-v] {check|login|once|daemon|debug|validate|update-check}\n' "$0" >&2
+		printf '用法: %s [-v] {check|login|once|daemon|debug|validate|status|audit|update-check}\n' "$0" >&2
 		exit 2
 		;;
 esac

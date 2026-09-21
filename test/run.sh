@@ -163,6 +163,27 @@ if grep -qE 'p@ss|JSESSIONID|wlanuserip=' "$AUTOVERIFY_RUN_DIR/status" 2>/dev/nu
 else
 	echo "    [OK]   运行状态未泄露密码、Cookie 或完整认证字段"
 fi
+_status_json=$(sh "$SCRIPT" status --json 2>&1)
+_status_rc=$?
+if [ "$_status_rc" = "0" ] && printf '%s\n' "$_status_json" | "$PY" -c 'import json, sys; x=json.load(sys.stdin); assert x["version"] == 1; assert x["result"] == "success"; assert x["service_enabled"] in (0, 1)' && ! printf '%s\n' "$_status_json" | grep -qF "$MAIN_PASSWORD"; then
+	echo "    [OK]   status --json 可严格解析且字段类型正确"
+else
+	echo "    [FAIL] status --json 无法严格解析或泄露敏感信息"; FAILED=1
+fi
+_status_probe_json=$(sh "$SCRIPT" status --probe --json 2>&1)
+_status_probe_rc=$?
+if [ "$_status_probe_rc" = "0" ] && printf '%s\n' "$_status_probe_json" | "$PY" -c 'import json, sys; assert json.load(sys.stdin)["probe"] in ("online", "offline")'; then
+	echo "    [OK]   status --probe --json 组合选项生效"
+else
+	echo "    [FAIL] status --probe --json 组合选项未生效"; FAILED=1
+fi
+_audit_json=$(sh "$SCRIPT" audit --json 2>&1)
+_audit_rc=$?
+if [ "$_audit_rc" = "0" ] && printf '%s\n' "$_audit_json" | "$PY" -c 'import json, sys; x=json.load(sys.stdin); assert x["version"] == 1; assert isinstance(x["checks"], list); assert isinstance(x["coverage"], list)' && ! printf '%s\n' "$_audit_json" | grep -qF "$MAIN_PASSWORD"; then
+	echo "    [OK]   audit --json 可严格解析且无敏感信息"
+else
+	echo "    [FAIL] audit --json 无法严格解析或泄露敏感信息"; FAILED=1
+fi
 echo "    mock 收到的请求:"
 sed 's/^/      /' "$TMPOUT"
 
