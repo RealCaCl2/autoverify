@@ -371,6 +371,7 @@ mock 仅在 `goToAuthResult` 被请求后才返回 204。
 | [docs/hardening.md](docs/hardening.md) | 反检测加固：TTL / NTP / DNS / DHCP / IPv6 |
 | [docs/detection.md](docs/detection.md) | 多设备检测方式清单、证据强度、自检方法 |
 | [docs/verification.md](docs/verification.md) | 实测记录 |
+| [docs/operations.md](docs/operations.md) | 安装后检查、诊断、回滚和升级 |
 
 
 ## 已知限制
