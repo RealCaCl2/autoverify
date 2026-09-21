@@ -291,6 +291,17 @@ MOCK_PROBE_MODE=login302 start_mock '{"message":"","nextPage":"goToAuthResult","
 check "应能跨两跳拿到登录页并完成认证" 0 "认证后连通性验证通过"
 stop_mock
 
+echo "=========== 9a. 相对 Location ==========="
+MOCK_PROBE_MODE=relative start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
+check "相对 Location 应按探测地址补全并完成认证" 0 "认证后连通性验证通过"
+stop_mock
+
+echo "=========== 9b. 单引号 + 跨行 HTML 属性 ==========="
+MOCK_PAGE_MODE=single-crossline start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
+check "单引号和跨行属性应能解析并完成认证" 0 "认证后连通性验证通过"
+stop_mock
+unset MOCK_PAGE_MODE
+
 echo "=========== 10. 空 portal.host (开源后的默认配置) ==========="
 # 包里默认 host 为空, 门户地址靠响应里的 /zportal/ 自动识别。
 # 这里同时卡住一个真 bug: case 的 *""* 能匹配任意字符串, host 为空时会把

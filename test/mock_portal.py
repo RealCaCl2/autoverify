@@ -19,6 +19,7 @@
 
 import http.server
 import os
+import re
 import sys
 import time
 
@@ -66,6 +67,21 @@ LOGIN_URL2 = (
     "&nasip=10%2e82%2e66%2e9&ssid=iHuaiGong%2dStudent&url=http%3a%2f%2fwww%2ehyit%2eedu%2ecn"
 ).format(port=PORT)
 
+RELATIVE_LOGIN_URL = (
+    "/zportal/loginForWeb"
+    "?wlanuserip=10.80.3.64&wlanacname=HYGXY%2dCR16K%2dMC-1F&mac=AABB-CCDD-EEFF"
+    "&nasip=10%2e82%2e66%2e9&ssid=iHuaiGong%2dStudent&url=http%3a%2f%2fwww%2ehyit%2eedu%2ecn"
+)
+
+
+def login_page():
+    page = LOGIN_PAGE
+    if os.environ.get("MOCK_PAGE_MODE") == "single-crossline":
+        # 模拟部分 NAS 的格式差异：属性使用单引号，并跨行排列。
+        page = re.sub(r'([A-Za-z][A-Za-z0-9_-]*)="([^"]*)"', r"\1='\2'", page)
+        page = page.replace(" ", "\n ")
+    return page
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def _send(self, code, body=b"", extra=()):
@@ -104,6 +120,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                 "</head></html>" % LOGIN_URL2)
             elif mode == "location200":
                 self._send(200, "", extra=[("Location", LOGIN_URL)])
+            elif mode == "relative":
+                self._send(302, extra=[("Location", RELATIVE_LOGIN_URL)])
             elif mode == "other302":
                 self._send(302, extra=[("Location", "http://portal.example.com/notice")])
             else:
@@ -112,7 +130,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # NAS 给的地址本身还会再跳一次; 不跟随跳转就只能拿到空 body
             self._send(302, extra=[("Location", LOGIN_URL)])
         elif self.path.startswith("/zportal/loginForWeb"):
-            self._send(200, LOGIN_PAGE, extra=[("Set-Cookie", "JSESSIONID=MOCK; Path=/zportal/")])
+            self._send(200, login_page(), extra=[("Set-Cookie", "JSESSIONID=MOCK; Path=/zportal/")])
         elif self.path.startswith("/zportal/goToAuthResult"):
             if os.environ.get("MOCK_NEXT_MODE", "") == "fail":
                 self._send(503, "认证结果页暂不可用")
