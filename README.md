@@ -162,8 +162,9 @@ logread -f -e autoverify     # Ctrl-C 退出
 
 ### LuCI 页面中的“操作”区
 
-共四个按钮：**立即认证一次** / **检测连通性** / **查看加固状态**，
-以及一个只读的 **将要提交的认证字段**。输出与退出码均以弹窗显示。
+操作区提供**立即认证一次** / **检测连通性** / **查看加固状态** / **检查更新**、
+**将要提交的认证字段**，以及只读的**运行状态** / **网络与防火墙审计** / **配置校验**。
+输出与退出码均以弹窗显示。
 
 ### 命令行
 
@@ -260,7 +261,7 @@ ACL 中**未授予 `autoverify login` 的执行权限** —— 该子命令会�
 ```
 www/luci-static/resources/view/autoverify.js      视图
 usr/share/luci/menu.d/luci-app-autoverify.json   菜单
-usr/share/rpcd/acl.d/luci-app-autoverify.json    权限(uci 读写 + 三条命令的 exec)
+usr/share/rpcd/acl.d/luci-app-autoverify.json    权限(uci 读写 + 只读诊断和有限操作命令的 exec)
 ```
 
 status 默认不发起网络探测；只有显式传入 --probe 才会探测一次。status 和 audit 均为只读，

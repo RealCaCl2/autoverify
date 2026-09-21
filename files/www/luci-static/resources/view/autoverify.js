@@ -26,6 +26,13 @@ return view.extend({
 	 * hint 用来解释退出码的含义。
 	 */
 	handleAction: function(cmd, args, title, hint) {
+		if (this._actionBusy) {
+			ui.addNotification(null, E('p', _('已有操作正在执行，请等待结果返回。')), 'warning');
+			return Promise.resolve();
+		}
+
+		this._actionBusy = true;
+		var self = this;
 		return fs.exec(cmd, args).then(function(res) {
 			var out = ((res.stdout || '') + (res.stderr || '')).replace(/\s+$/, '');
 			var body = out || _('(命令没有产生输出)');
@@ -46,6 +53,8 @@ return view.extend({
 		}).catch(function(err) {
 			ui.addNotification(null,
 				E('p', _('执行失败: %s').format(err && err.message ? err.message : err)), 'error');
+		}).then(function() {
+			self._actionBusy = false;
 		});
 	},
 
@@ -293,6 +302,31 @@ return view.extend({
 						_('只读，不会提交认证。密码已脱敏。' +
 						  ' 未认证时才能看到完整的登录页字段；在线时会提示“未发现门户重定向”，这是正常的。'))
 				}, _('将要提交的认证字段 (只读)'))
+			]),
+			E('div', { 'class': 'cbi-value' }, [
+				E('button', {
+					'class': 'btn cbi-button',
+					'click': ui.createHandlerFn(this, 'handleAction',
+						'/usr/sbin/autoverify', [ 'status' ],
+						_('查看运行状态'),
+						_('只读，不发起网络探测；如需探测请使用“检测连通性”。'))
+				}, _('查看运行状态')),
+				' ',
+				E('button', {
+					'class': 'btn cbi-button',
+					'click': ui.createHandlerFn(this, 'handleAction',
+						'/usr/sbin/autoverify', [ 'audit' ],
+						_('网络与防火墙审计'),
+						_('只读，缺少可选系统命令时仍会输出部分结果。'))
+				}, _('网络与防火墙审计')),
+				' ',
+				E('button', {
+					'class': 'btn cbi-button',
+					'click': ui.createHandlerFn(this, 'handleAction',
+						'/usr/sbin/autoverify', [ 'validate' ],
+						_('校验配置'),
+						_('只读，不访问门户、不修改 UCI 或防火墙。'))
+				}, _('校验配置'))
 			]),
 			E('div', { 'class': 'cbi-section-descr' },
 				_('提示：手动执行时的日志只进终端，不进 syslog；' +
