@@ -11,6 +11,7 @@
 				"/usr/sbin/autoverify -v once": [ "exec" ],
 				"/usr/sbin/autoverify validate": [ "exec" ],
 				"/usr/sbin/autoverify status": [ "exec" ],
+				"/usr/sbin/autoverify status --json": [ "exec" ],
 				"/usr/sbin/autoverify audit": [ "exec" ],
 				"/usr/sbin/autoverify update-check": [ "exec" ],
 				"/usr/sbin/autoverify-hardening status": [ "exec" ]

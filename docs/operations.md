@@ -97,6 +97,12 @@ ls -la /var/run/autoverify
 ~~~
 
 认证锁是 /var/run/autoverify/auth.lock.d。并发调用返回退出码 3，不会排队。
+
+> 注意：`status` 输出里的 `daemon_pid` / `daemon_count` 是 `pidof autoverify` 的结果，
+> 而 busybox 的 `pidof` 按脚本名匹配，**会把发起本次查询的进程自身（及其子 shell）
+> 一起数进去**。所以在命令行下这两个值不可信（守护进程已停时计数也不为 0）“某接口
+> 已在线”之类的判断不要拿它们做依据；要看真实存活请用
+> `ubus call service list '{"name":"autoverify"}'`（LuCI 页面顶部的状态面板就是这幺做的）。
 正常情况下锁会在进程结束时释放；stale lock 会根据 PID、/proc 命令行和最大年龄回收。
 不要手工删除正在运行任务的锁；如果确认进程已不存在，再先保存 owner 文件内容供排障。
 
@@ -159,3 +165,15 @@ rm -f /tmp/autoverify.uci /tmp/autoverify.apk
 ~~~
 
 如果安装器提示 conffile 冲突，保留现有配置，先不要用包内默认文件覆盖它。
+
+### 8.1 升级后 ACL 需要重载
+
+本包在 `/usr/share/rpcd/acl.d/luci-app-autoverify.json` 里授予了 LuCI 所需的只读命令权限。
+升级后若页面顶部的运行状态显示“读取失败：Permission denied”，说明 rpcd 还在用旧的
+ACL 缓存，执行以下命令后刷新页面即可（不需要重启路由器）：
+
+~~~sh
+/etc/init.d/rpcd reload
+~~~
+
+这会让 LuCI 登录会话失效，需要重新登录一次。
