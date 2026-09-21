@@ -56,6 +56,10 @@ var STYLE = [
 	'.av-badge{display:inline-block;padding:.05em .5em;border-radius:10px;font-size:.85em;color:#fff;white-space:nowrap}',
 	'.av-ok{background:#2e7d32}.av-bad{background:#c62828}.av-warn{background:#b26a00}.av-idle{background:#616161}',
 	'.av-hint{font-size:.85em;opacity:.75;margin:.3em 0}',
+	/* argon 等主题会把 .cbi-section 的 padding 清零, 页面留白是靠表单行
+	 * (.cbi-value{padding:0 1rem}) 撑出来的。所以自定义面板的内容块要自己留边距,
+	 * 否则卡片与按钮会紧贴左右两边。数值跟随主题自己的表单行。 */
+	'.av-body{padding:0 1rem}',
 	'.av-group{font-weight:600;font-size:.9em;opacity:.8;margin:.9em 0 .35em}',
 	'.av-row{display:flex;flex-wrap:wrap;gap:.5em;align-items:center}',
 	'.av-out{white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto;',
@@ -294,15 +298,18 @@ return view.extend({
 		var self = this, m, s, o, ss;
 
 		/* ------------------------------------------------------ 状态概览 --- */
-		var statusBody = E('div', {}, E('em', {}, _('正在读取运行状态…')));
+		/* statusBody 的 class 不会被 dom.content 改掉(它只换子节点), 所以内边距放它身上。 */
+		var statusBody = E('div', { 'class': 'av-body' }, E('em', {}, _('正在读取运行状态…')));
 		var statusPanel = E('div', { 'class': 'cbi-section' }, [
 			E('h3', _('运行状态')),
 			statusBody,
-			E('div', { 'class': 'av-row', 'style': 'margin-top:.5em' }, [
-				E('button', {
-					'class': 'btn cbi-button cbi-button-neutral',
-					'click': ui.createHandlerFn(this, 'handleRefresh', statusBody)
-				}, _('立即刷新'))
+			E('div', { 'class': 'av-body', 'style': 'margin-top:.6em' }, [
+				E('div', { 'class': 'av-row' }, [
+					E('button', {
+						'class': 'btn cbi-button cbi-button-neutral',
+						'click': ui.createHandlerFn(this, 'handleRefresh', statusBody)
+					}, _('立即刷新'))
+				])
 			])
 		]);
 
@@ -572,52 +579,54 @@ return view.extend({
 		 * 缩进、行高按表单字段调过, 拿来装按钮会跟着变。 */
 		var actions = E('div', { 'class': 'cbi-section' }, [
 			E('h3', _('操作')),
-			E('div', { 'class': 'cbi-section-descr' },
-				_('以下按钮调用路由器上的命令，输出和退出码会弹窗显示，不会修改任何配置。')),
+			E('div', { 'class': 'av-body' }, [
+				E('div', { 'class': 'cbi-section-descr' },
+					_('以下按钮调用路由器上的命令，输出和退出码会弹窗显示，不会修改任何配置。')),
 
-			E('div', { 'class': 'av-group' }, _('认证')),
-			E('div', { 'class': 'av-row' }, [
-				this.actionButton(_('立即认证一次'), 'cbi-button-action',
-					BIN, [ '-v', 'once' ], _('立即认证一次'),
-					_('已在线时不会重复认证 —— 在线状态下强行认证会顶掉自己已有的会话。' +
-					  '退出码 0 = 已在线或认证成功，1 = 失败，3 = 已有认证任务在跑。')),
-				this.actionButton(_('检测连通性'), 'cbi-button-neutral',
-					BIN, [ '-v', 'check' ], _('检测连通性'),
-					_('退出码 0 = 在线，1 = 离线。'))
-			]),
+				E('div', { 'class': 'av-group' }, _('认证')),
+				E('div', { 'class': 'av-row' }, [
+					this.actionButton(_('立即认证一次'), 'cbi-button-action',
+						BIN, [ '-v', 'once' ], _('立即认证一次'),
+						_('已在线时不会重复认证 —— 在线状态下强行认证会顶掉自己已有的会话。' +
+						  '退出码 0 = 已在线或认证成功，1 = 失败，3 = 已有认证任务在跑。')),
+					this.actionButton(_('检测连通性'), 'cbi-button-neutral',
+						BIN, [ '-v', 'check' ], _('检测连通性'),
+						_('退出码 0 = 在线，1 = 离线。'))
+				]),
 
-			E('div', { 'class': 'av-group' }, _('只读诊断')),
-			E('div', { 'class': 'av-row' }, [
-				this.actionButton(_('运行状态'), '', BIN, [ 'status' ],
-					_('查看运行状态'),
-					_('只读，不发起网络探测；如需探测请使用“检测连通性”。')),
-				this.actionButton(_('网络与防火墙审计'), '', BIN, [ 'audit' ],
-					_('网络与防火墙审计'),
-					_('只读，缺少可选系统命令时仍会输出部分结果。')),
-				this.actionButton(_('校验配置'), '', BIN, [ 'validate' ],
-					_('校验配置'),
-					_('只读，不访问门户、不修改 UCI 或防火墙。' +
-					  '退出码 0 = 配置有效，1 = 配置错误，2 = 环境不完整。')),
-				this.actionButton(_('加固状态'), '', HARDENING_BIN, [ 'status' ],
-					_('查看加固状态'),
-					_('对比 UCI 开关与系统里实际生效的规则、监听和接口参数。')),
-				this.actionButton(_('将要提交的认证字段'), '', BIN, [ 'debug' ],
-					_('将要提交的认证字段 (只读)'),
-					_('只读，不会提交认证。密码已脱敏。' +
-					  ' 未认证时才能看到完整的登录页字段；在线时会提示“未发现门户重定向”，这是正常的。'))
-			]),
+				E('div', { 'class': 'av-group' }, _('只读诊断')),
+				E('div', { 'class': 'av-row' }, [
+					this.actionButton(_('运行状态'), '', BIN, [ 'status' ],
+						_('查看运行状态'),
+						_('只读，不发起网络探测；如需探测请使用“检测连通性”。')),
+					this.actionButton(_('网络与防火墙审计'), '', BIN, [ 'audit' ],
+						_('网络与防火墙审计'),
+						_('只读，缺少可选系统命令时仍会输出部分结果。')),
+					this.actionButton(_('校验配置'), '', BIN, [ 'validate' ],
+						_('校验配置'),
+						_('只读，不访问门户、不修改 UCI 或防火墙。' +
+						  '退出码 0 = 配置有效，1 = 配置错误，2 = 环境不完整。')),
+					this.actionButton(_('加固状态'), '', HARDENING_BIN, [ 'status' ],
+						_('查看加固状态'),
+						_('对比 UCI 开关与系统里实际生效的规则、监听和接口参数。')),
+					this.actionButton(_('将要提交的认证字段'), '', BIN, [ 'debug' ],
+						_('将要提交的认证字段 (只读)'),
+						_('只读，不会提交认证。密码已脱敏。' +
+						  ' 未认证时才能看到完整的登录页字段；在线时会提示“未发现门户重定向”，这是正常的。'))
+				]),
 
-			E('div', { 'class': 'av-group' }, _('维护')),
-			E('div', { 'class': 'av-row' }, [
-				this.actionButton(_('检查更新'), '', BIN, [ 'update-check' ],
-					_('检查更新'),
-					_('退出码 0 = 已是最新，1 = 有新版本，2 = 查询失败。' +
-					  '查询 GitHub Releases，只读，不会自动安装。'))
-			]),
+				E('div', { 'class': 'av-group' }, _('维护')),
+				E('div', { 'class': 'av-row' }, [
+					this.actionButton(_('检查更新'), '', BIN, [ 'update-check' ],
+						_('检查更新'),
+						_('退出码 0 = 已是最新，1 = 有新版本，2 = 查询失败。' +
+						  '查询 GitHub Releases，只读，不会自动安装。'))
+				]),
 
-			E('div', { 'class': 'cbi-section-descr' },
-				_('提示：手动执行时的日志只进终端，不进 syslog；' +
-				  '只有守护进程自己的日志会被 procd 转发到系统日志。'))
+				E('div', { 'class': 'cbi-section-descr' },
+					_('提示：手动执行时的日志只进终端，不进 syslog；' +
+					  '只有守护进程自己的日志会被 procd 转发到系统日志。'))
+			])
 		]);
 
 		return m.render().then(function(mapEl) {

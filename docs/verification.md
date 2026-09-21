@@ -72,6 +72,17 @@
   （PID 7772）时，`status --json` 报 `daemon_pid=24242`（即本次查询自己的 PID）、
   `daemon_count=3`。命令行的 daemon PID/数量因此不可信；LuCI 面板已改为读 procd 状态。
 
+### 跟进：r15（同一界面的内边距修复）
+
+r14 装上后由使用者在浏览器里发现：**状态面板与操作区的内容紧贴左右两边**。
+根因就在 argon 的 CSS 里 —— 它有一条全局规则把 `.cbi-section` 的内边距清零
+（`.cbi-section, ... { padding: 0; border: 0; border-radius: .25rem; ... }`），
+页面留白实际是靠表单行 `.cbi-value{padding:0 1rem}` 撑出来的。
+而这两块面板里层是自定义的 `.av-grid` / `.av-row`，都不带内边距，于是贴边。
+
+修法：把自定义内容块包一层 `.av-body{padding:0 1rem}`（数值跟随主题自己的表单行），
+不去修改主题的 `.cbi-section`。该修复随 r15 重新构建、重新安装到实机。
+
 仍是推测、没单独验证过的：
 
 - ⚠️ **LuCI 页面的实际渲染效果**：本次已在设备上核实了 API 存在、文件可经 HTTP 取到、
