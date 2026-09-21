@@ -148,6 +148,50 @@ else
 	echo "    [FAIL] 非法 TTL 未被拒绝"; FAILED=1
 fi
 
+_username_save="$MAIN_USERNAME"
+export MAIN_USERNAME=
+_validate_out=$(sh "$SCRIPT" validate 2>&1)
+_validate_rc=$?
+export MAIN_USERNAME="$_username_save"
+if [ "$_validate_rc" = "1" ] && printf '%s\n' "$_validate_out" | grep -q 'main.username'; then
+	echo "    [OK] 空账号被拒绝"
+else
+	echo "    [FAIL] 空账号未被拒绝"; FAILED=1
+fi
+
+_password_save="$MAIN_PASSWORD"
+export MAIN_PASSWORD=
+_validate_out=$(sh "$SCRIPT" validate 2>&1)
+_validate_rc=$?
+export MAIN_PASSWORD="$_password_save"
+if [ "$_validate_rc" = "1" ] && printf '%s\n' "$_validate_out" | grep -q 'main.password'; then
+	echo "    [OK] 空密码被拒绝"
+else
+	echo "    [FAIL] 空密码未被拒绝"; FAILED=1
+fi
+
+_timeout_save="$TUNING_HTTP_TIMEOUT"
+export TUNING_HTTP_TIMEOUT=0
+_validate_out=$(sh "$SCRIPT" validate 2>&1)
+_validate_rc=$?
+export TUNING_HTTP_TIMEOUT="$_timeout_save"
+if [ "$_validate_rc" = "1" ] && printf '%s\n' "$_validate_out" | grep -q 'http_timeout'; then
+	echo "    [OK] 零 HTTP timeout 被拒绝"
+else
+	echo "    [FAIL] 零 HTTP timeout 未被拒绝"; FAILED=1
+fi
+
+_url_save="${PORTAL_URL:-}"
+export PORTAL_URL='ftp://invalid.example/login'
+_validate_out=$(sh "$SCRIPT" validate 2>&1)
+_validate_rc=$?
+export PORTAL_URL="$_url_save"
+if [ "$_validate_rc" = "1" ] && printf '%s\n' "$_validate_out" | grep -q 'portal.url'; then
+	echo "    [OK] 非 HTTP(S) 门户地址被拒绝"
+else
+	echo "    [FAIL] 非 HTTP(S) 门户地址未被拒绝"; FAILED=1
+fi
+
 echo "=========== 1. 认证成功 ==========="
 start_mock '{"message":"","nextPage":"goToAuthResult","result":"success"}'
 check "probe 302 -> 抓登录页 -> 提交 -> 跟随 nextPage -> 204 复核" 0 "认证后连通性验证通过"

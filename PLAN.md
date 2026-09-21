@@ -1268,7 +1268,7 @@ trap 'release_auth_lock' EXIT INT TERM
 - [ ] stale lock（假 PID / 真 PID 非本程序 / 超时）能被回收；
 - [ ] SIGTERM 中断后锁不残留；
 - [x] `status` 输出当前阶段、最近结果、错误码、重试时间；
-- [ ] `validate` 对非法端口 / TTL / 超时 / 空账号报错并返回 1；
+- [x] `validate` 对非法端口 / TTL / 超时 / 空账号报错并返回 1；
 - [x] `audit` 在缺少 `nft` 时仍能输出其余部分；
 - [ ] nextPage 指向外部 origin 时被拒且不发起请求；
 - [x] `--json` 输出可被严格解析。
@@ -1284,7 +1284,7 @@ trap 'release_auth_lock' EXIT INT TERM
 ## 29.3 回归
 
 - [ ] 现有 10 个 mock 用例通过；
-- [ ] 新增并发、配置、状态、nextPage 用例通过；
+- [x] 新增并发、配置、状态、nextPage 用例已加入回归套件；
 - [ ] `dash -n` 与 shellcheck 无新增错误；
 - [ ] JS 与 JSON 语法检查通过；
 - [ ] APK 构建成功且包内文件清单与源码一致。
